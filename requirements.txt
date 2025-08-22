@@ -1,4 +1,6 @@
 streamlit
 pandas
 requests
-st-gsheets-connection
+toml
+SQLAlchemy
+psycopg2-binary
