@@ -81,17 +81,24 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
+    # This function now correctly formats the "Bearer" token.
     app_secrets = load_secrets()
-    if "api_key" not in app_secrets:
-        st.error("API key not found. Please add it to your secrets.")
+    
+    # Check for the nested api_key
+    if "secrets" not in app_secrets or "api_key" not in app_secrets["secrets"]:
+        st.error("API key not found. Please add it to your secrets under a [secrets] heading.")
         return None, "API key not configured."
-    headers = {'accept': 'application/json', 'Authorization': app_secrets["api_key"]}
+
+    # Prepend "Bearer " to the key from secrets
+    auth_header_value = f"Bearer {app_secrets['secrets']['api_key']}"
+    headers = {'accept': 'application/json', 'Authorization': auth_header_value}
+    
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as e:
-        return None, f"API request failed: {e.response.status_code} - {e.response.text}"
+        return None, f"API request failed: {e.response.status_code} - {e.response.text}. Check if your API key is correct and active."
     except requests.exceptions.RequestException as e:
         return None, f"Connection Error: Could not connect to the API. {e}"
 
@@ -354,3 +361,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
