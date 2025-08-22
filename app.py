@@ -32,7 +32,6 @@ USERS = {
     "Rian": "pass123", "Tucker": "pass123", "Aaron": "pass123",
     "Brayson": "pass123"
 }
-PLAYER_STATS_DB = "player_stats_2024.json"
 SCOREBOARD_DB = "scoreboard.json"
 
 # --- Helper Functions (with Caching) ---
@@ -124,23 +123,6 @@ def fetch_game_results(year, week):
             elif game['away_points'] > game['home_points']:
                 winning_teams.add(game['away_team'])
     return winning_teams
-
-def fetch_player_stats():
-    """Fetch and cache 2024 player stats."""
-    stats_data, error = fetch_api_data("stats/player/season", {'year': 2024})
-    if error:
-        st.error(error)
-        return
-    if not stats_data:
-        st.warning("No player stats found for 2024.")
-        return
-    try:
-        with open(PLAYER_STATS_DB, 'w', encoding='utf-8') as f:
-            json.dump(stats_data, f, indent=4)
-        st.session_state.player_stats_cache = stats_data
-        st.toast(f"Successfully fetched and saved stats for {len(stats_data)} players.")
-    except IOError as e:
-        st.error(f"Could not save player stats to file: {e}")
 
 def fetch_betting_lines(year, week):
     """Fetch betting lines for a specific year and week."""
@@ -263,7 +245,6 @@ def display_scoreboard():
 
 @st.dialog("Returning Player Analytics")
 def display_analytics():
-    # ... (function content unchanged)
     st.subheader(f"Returning Production for {st.session_state.username}'s Teams")
     try:
         df = pd.read_csv("returning_players_2025.csv")
@@ -288,38 +269,6 @@ def display_analytics():
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
-@st.dialog("Player Season Stats (2024)")
-def display_player_stats():
-    # ... (function content unchanged)
-    if not st.session_state.player_stats_cache:
-        st.warning("Player stats data is not loaded.")
-        if st.button("Fetch Player Stats from API"):
-            fetch_player_stats()
-            st.rerun()
-        return
-
-    st.subheader("Player Season Stats (2024)")
-    stats_df = pd.DataFrame(st.session_state.player_stats_cache)
-
-    search_query = st.text_input("Search for a player...", key="player_search")
-    if search_query:
-        stats_df = stats_df[stats_df['player'].str.contains(search_query, case=False, na=False)]
-
-    if not stats_df.empty:
-        try:
-            pivot_df = stats_df.pivot_table(
-                index=['player', 'team', 'position'],
-                columns='statType',
-                values='stat',
-                aggfunc='first'
-            ).reset_index().fillna(0)
-            st.dataframe(pivot_df, use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.error(f"Could not process player data: {e}")
-            st.dataframe(stats_df)
-    else:
-        st.info("No players found matching your search.")
-
 # --- Main Application Logic ---
 
 def main_app():
@@ -331,8 +280,6 @@ def main_app():
 
         if st.button("📊 View Team Analytics", use_container_width=True):
             display_analytics()
-        if st.button("👤 View Player Stats", use_container_width=True):
-            display_player_stats()
         
         st.divider()
         st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
@@ -408,7 +355,6 @@ def main_app():
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
             if selected_teams:
                 st.subheader("Export Your Picks")
-                # ... (export logic is unchanged)
                 num_picks = len(selected_teams)
                 if current_week > 0 and num_picks != 6:
                     st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**. Please confirm before exporting.")
@@ -454,12 +400,6 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'weekly_lines_cache' not in st.session_state:
     st.session_state.weekly_lines_cache = {}
-if 'player_stats_cache' not in st.session_state:
-    try:
-        with open(PLAYER_STATS_DB, 'r', encoding='utf-8') as f:
-            st.session_state.player_stats_cache = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        st.session_state.player_stats_cache = None
 
 # --- Main Render Logic ---
 
