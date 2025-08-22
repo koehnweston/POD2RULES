@@ -244,7 +244,9 @@ def main_app():
                 if current_week > 0 and num_picks != 6:
                     st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
-                if st.button("✅ Submit My Picks for this Week", use_container_width=True, type="primary"):
+                st.divider()
+                if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
+                    display_user_picks(st.session_state.username, current_week)
                     conn = st.connection("db", type="sql")
                     user = st.session_state.username
                     
@@ -302,4 +304,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
