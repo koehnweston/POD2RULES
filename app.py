@@ -143,7 +143,6 @@ def display_scoreboard():
             st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
             return
         
-        # Rename columns to match pivot table expectations if necessary
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
@@ -155,8 +154,6 @@ def display_scoreboard():
         st.error(f"Could not connect to or read from the database: {e}")
 
 # --- UI Component Functions ---
-
-
 
 def display_user_picks(user, week):
     """Fetches and displays a user's picks for a given week from the database."""
@@ -170,10 +167,8 @@ def display_user_picks(user, week):
     if picks_df.empty:
         st.info("You have not submitted any picks for this week yet.")
     else:
-        # Rename column for better display
         picks_df.rename(columns={'team': 'Selected Team'}, inplace=True)
         st.dataframe(picks_df, hide_index=True, use_container_width=True)
-
 
 def display_login_form():
     """Displays the login form."""
@@ -236,36 +231,42 @@ def main_app():
                 disabled=["My Team", "Opponent"],
                 hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
             )
-            selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
             
-            if selected_teams:
-                st.subheader("Submit Your Picks")
-                num_picks = len(selected_teams)
-                if current_week > 0 and num_picks != 6:
-                    st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
+            selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
 
-                st.divider()
-                if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
-                    display_user_picks(st.session_state.username, current_week)
-                    conn = st.connection("db", type="sql")
-                    user = st.session_state.username
+            st.subheader("Submit Your Picks")
+            num_picks = len(selected_teams)
+
+            if num_picks != 6 and num_picks > 0:
+                 st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
+
+            if st.button(
+                "✅ Submit My Picks for this Week",
+                use_container_width=True,
+                type="primary",
+                disabled=not selected_teams
+            ):
+                conn = st.connection("db", type="sql")
+                user = st.session_state.username
+                
+                with conn.session as s:
+                    s.execute(
+                        text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
+                        params=dict(user=user, week=current_week)
+                    )
                     
-                    with conn.session as s:
-                        # First, delete any old picks for this user and week
+                    for team in selected_teams:
                         s.execute(
-                            text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
-                            params=dict(user=user, week=current_week)
+                            text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'),
+                            params=dict(user=user, week=current_week, team=team)
                         )
-                        
-                        # Then, insert the new picks
-                        for team in selected_teams:
-                            s.execute(
-                                text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'),
-                                params=dict(user=user, week=current_week, team=team)
-                            )
-                        s.commit()
-                    
-                    st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
+                    s.commit()
+                
+                st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
+
+            st.divider()
+            if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
+                display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
@@ -280,7 +281,7 @@ def main_app():
         else:
             week_to_update = st.selectbox(
                 "Select week to update scores",
-                options=updatable_weeks,
+                options=updatable_decks,
                 index=len(updatable_weeks) - 1,
             )
             
@@ -304,5 +305,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
-
