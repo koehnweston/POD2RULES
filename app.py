@@ -6,6 +6,31 @@ Created on Fri Aug 22 07:50:31 2025
 """
 
 # app.py
+
+
+import streamlit as st
+
+st.set_page_config(layout="wide")
+st.title("Secrets Loading Test 🕵️")
+
+st.header("1. All Secrets Loaded by Streamlit")
+st.info("This section shows everything Streamlit found in your secrets.toml file.")
+st.write("If this shows `{}`, the file is still not being found or read correctly.")
+st.json(st.secrets.to_dict())
+
+st.header("2. Specific Spreadsheet Secret")
+st.info("This section checks for the specific spreadsheet name needed for the connection.")
+try:
+    # Attempt to access the specific secret key
+    spreadsheet_name = st.secrets.connections.gsheets.spreadsheet
+    st.success(f"✅ Success! Found spreadsheet name: '{spreadsheet_name}'")
+except Exception:
+    st.error("❌ Error! Could not find the spreadsheet name in the secrets dictionary. This confirms the secrets are not structured correctly or are not being loaded.")
+
+st.header("3. Check requirements.txt")
+st.info("Please ensure `streamlit-gsheets-connection` is in your requirements.txt file.")
+
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -370,5 +395,6 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
