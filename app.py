@@ -33,7 +33,7 @@ USERS = {
     "Brayson": "pass123"
 }
 SCOREBOARD_DB = "scoreboard.json"
-PICKS_DB = "all_picks.json" # New central database for all picks
+PICKS_DB = "all_picks.json"
 
 # --- Helper Functions (with Caching) ---
 
@@ -159,20 +159,28 @@ def save_picks_to_db(username, week, selected_teams):
     except IOError as e:
         st.error(f"Failed to save picks: {e}")
 
+def load_my_picks(username, week):
+    """Loads a specific user's picks for a given week from the JSON DB."""
+    try:
+        with open(PICKS_DB, 'r', encoding='utf-8') as f:
+            all_picks = json.load(f)
+        my_weekly_picks = all_picks.get(username, {}).get(str(week), [])
+        return my_weekly_picks
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
 def parse_weekly_picks(week):
-    """MODIFIED: Parses all user picks for a given week from the JSON database."""
+    """Parses all user picks for a given week from the JSON database."""
     try:
         with open(PICKS_DB, 'r', encoding='utf-8') as f:
             all_picks = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        # This is not an error if no one has made picks yet
         return {}
 
     weekly_picks = {}
     for user, picks_by_week in all_picks.items():
         if str(week) in picks_by_week:
             weekly_picks[user] = picks_by_week[str(week)]
-
     return weekly_picks
 
 def update_scoreboard(week, year):
@@ -183,7 +191,7 @@ def update_scoreboard(week, year):
             st.warning(f"Could not update scores for Week {week} as no game results were found.")
             return
 
-        user_picks = parse_weekly_picks(week) # Now reads from JSON DB
+        user_picks = parse_weekly_picks(week)
         if not user_picks:
             st.warning(f"No user picks have been submitted for Week {week}.")
             return
@@ -250,14 +258,43 @@ def display_scoreboard():
     df = df.sort_values(by='Total Wins', ascending=False)
     display_cols = week_cols + ['Total Wins']
     df = df[display_cols]
-
-    for col in df.columns:
-        df[col] = df[col].astype(int)
+    df[week_cols] = df[week_cols].astype(int)
+    df['Total Wins'] = df['Total Wins'].astype(int)
 
     st.dataframe(df, use_container_width=True)
 
+def display_weekly_results(week):
+    """Shows all user picks and their results for a given scored week."""
+    st.subheader(f"Picks & Results for Week {week}")
+    year = datetime.datetime.now().year
+    winning_teams = fetch_game_results(year, week)
+    all_user_picks = parse_weekly_picks(week)
+
+    if not all_user_picks:
+        st.info("No picks were submitted for this week.")
+        return
+
+    users = sorted(all_user_picks.keys())
+    cols = st.columns(len(users))
+
+    for idx, user in enumerate(users):
+        with cols[idx]:
+            st.markdown(f"**{user}**")
+            picks = all_user_picks.get(user, [])
+            if not picks:
+                st.write("No picks.")
+                continue
+
+            results_data = []
+            for pick in sorted(picks):
+                is_winner = pick in winning_teams
+                results_data.append({'Pick': pick, 'Result': '✅ Win' if is_winner else '❌ Loss'})
+            
+            st.dataframe(pd.DataFrame(results_data), hide_index=True, use_container_width=True)
+
 @st.dialog("Returning Player Analytics")
 def display_analytics():
+    # ... (function content unchanged)
     st.subheader(f"Returning Production for {st.session_state.username}'s Teams")
     try:
         df = pd.read_csv("returning_players_2025.csv")
@@ -312,6 +349,9 @@ def main_app():
                 with st.spinner(f"Fetching lines for Week {current_week}..."):
                     fetch_betting_lines(current_year, current_week)
 
+        # Load any picks previously saved by the current user for this week
+        my_saved_picks = load_my_picks(st.session_state.username, current_week)
+
         try:
             schedule_df = pd.read_csv(f"2025_week_{current_week}.csv")
             matchups = {row['homeTeam']: row['awayTeam'] for _, row in schedule_df.iterrows()}
@@ -324,11 +364,17 @@ def main_app():
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
-            picks_data.append({"Select": False, "My Team": team, "Opponent": opponent})
+            # Pre-select checkboxes if the team is in the user's saved picks
+            picks_data.append({
+                "Select": team in my_saved_picks,
+                "My Team": team,
+                "Opponent": opponent
+            })
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
 
+        # ... (Betting Lines display logic is unchanged)
         lines_cache = st.session_state.weekly_lines_cache.get(current_week)
         if lines_cache and not schedule_df.empty:
             lines_to_display = []
@@ -349,15 +395,11 @@ def main_app():
             edited_df = st.data_editor(picks_df, column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)}, disabled=["My Team", "Opponent"], hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}")
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
             
-            if selected_teams:
-                st.subheader("Submit Your Picks")
+            if st.button(f"Submit Picks for Week {current_week}", use_container_width=True, type="primary"):
                 num_picks = len(selected_teams)
-                if current_week > 0 and num_picks != 6:
-                    st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**. Please confirm before submitting.")
-                
-                # REPLACED download button with a submit button
-                if st.button(f"Submit {num_picks} Picks for Week {current_week}", use_container_width=True, type="primary"):
-                    save_picks_to_db(st.session_state.username, current_week, selected_teams)
+                if current_week > 0 and num_picks != 6 and num_picks > 0:
+                     st.warning(f"⚠️ The standard is 6 picks, but you have submitted **{num_picks}**. Please confirm this is correct.")
+                save_picks_to_db(st.session_state.username, current_week, selected_teams)
 
     with tab2:
         st.title("League Scoreboard")
@@ -371,6 +413,25 @@ def main_app():
             st.rerun()
         st.divider()
         display_scoreboard()
+
+        # NEW: Section to review all picks for a scored week
+        st.divider()
+        st.header("🔍 Review Weekly Picks")
+        try:
+            with open(SCOREBOARD_DB, 'r') as f:
+                scoreboard_data = json.load(f)
+            scored_weeks = set()
+            for user_scores in scoreboard_data.values():
+                scored_weeks.update(user_scores.keys())
+            
+            if scored_weeks:
+                sorted_weeks = sorted([int(w) for w in scored_weeks], reverse=True)
+                week_to_review = st.selectbox("Select a scored week to see all picks", options=sorted_weeks)
+                display_weekly_results(week_to_review)
+            else:
+                st.info("No weeks have been scored yet. Update a week's scores to review picks.")
+        except (FileNotFoundError, json.JSONDecodeError):
+            st.info("Scoreboard is empty. No picks to review.")
 
 # --- App Initialization and State Management ---
 
