@@ -6,31 +6,6 @@ Created on Fri Aug 22 07:50:31 2025
 """
 
 # app.py
-
-
-import streamlit as st
-
-st.set_page_config(layout="wide")
-st.title("Secrets Loading Test 🕵️")
-
-st.header("1. All Secrets Loaded by Streamlit")
-st.info("This section shows everything Streamlit found in your secrets.toml file.")
-st.write("If this shows `{}`, the file is still not being found or read correctly.")
-st.json(st.secrets.to_dict())
-
-st.header("2. Specific Spreadsheet Secret")
-st.info("This section checks for the specific spreadsheet name needed for the connection.")
-try:
-    # Attempt to access the specific secret key
-    spreadsheet_name = st.secrets.connections.gsheets.spreadsheet
-    st.success(f"✅ Success! Found spreadsheet name: '{spreadsheet_name}'")
-except Exception:
-    st.error("❌ Error! Could not find the spreadsheet name in the secrets dictionary. This confirms the secrets are not structured correctly or are not being loaded.")
-
-st.header("3. Check requirements.txt")
-st.info("Please ensure `streamlit-gsheets-connection` is in your requirements.txt file.")
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -39,7 +14,6 @@ import re
 import os
 from collections import defaultdict
 import toml
-# NEW: Import the Google Sheets connection component
 from streamlit_gsheets import GSheetsConnection
 
 # --- Page and App Configuration ---
@@ -106,16 +80,11 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
-    # This function now correctly formats the "Bearer" token.
-    app_secrets = load_secrets()
-    
-    # Check for the nested api_key
-    if "secrets" not in app_secrets or "api_key" not in app_secrets["secrets"]:
+    if "secrets" not in st.secrets or "api_key" not in st.secrets.secrets:
         st.error("API key not found. Please add it to your secrets under a [secrets] heading.")
         return None, "API key not configured."
 
-    # Prepend "Bearer " to the key from secrets
-    auth_header_value = f"Bearer {app_secrets['secrets']['api_key']}"
+    auth_header_value = f"Bearer {st.secrets.secrets.api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
     
     try:
@@ -164,7 +133,7 @@ def fetch_betting_lines(year, week):
     st.session_state.weekly_lines_cache[week] = processed_lines
     st.success(f"Fetched betting lines for {len(lines_data)} games.")
 
-# --- Scoreboard Logic (Now with Google Sheets) ---
+# --- Scoreboard Logic (with Google Sheets) ---
 
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the Google Sheet."""
@@ -268,15 +237,6 @@ def display_analytics():
 
 def main_app():
     """The main application interface shown after a successful login."""
-
-    # --- TEMPORARY DEBUG CODE ---
-    st.header("🕵️ Secrets Debug View")
-    st.info("This is a temporary view to check if secrets are loaded correctly.")
-    st.write("Contents of st.secrets:")
-    st.json(st.secrets.to_dict())
-    # --- END OF DEBUG CODE ---
-
-    
     with st.sidebar:
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
@@ -321,8 +281,6 @@ def main_app():
 
         st.subheader(f"Your Matchups for Week {current_week}")
 
-        # Betting lines display logic can be added here if needed
-
         if not picks_df.empty:
             edited_df = st.data_editor(
                 picks_df,
@@ -345,16 +303,10 @@ def main_app():
                         "Team": selected_teams
                     })
                     
-                    # --- FINAL FIX IS HERE ---
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     
-                    # 1. Read the existing data from the "Picks" worksheet
                     existing_picks_df = conn.read(worksheet="Picks")
-                    
-                    # 2. Combine the old data with the new picks
                     updated_picks_df = pd.concat([existing_picks_df, picks_to_save], ignore_index=True)
-                    
-                    # 3. Write the full, updated table back to the sheet
                     conn.update(worksheet="Picks", data=updated_picks_df)
                     
                     st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
@@ -395,6 +347,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
-
-
