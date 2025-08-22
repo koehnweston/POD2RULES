@@ -1,0 +1,10 @@
+id,season,week,seasonType,startDate,startTimeTBD,completed,neutralSite,conferenceGame,attendance,venueId,venue,homeId,homeTeam,homeClassification,homeConference,homePoints,homeLineScores,homePostgameWinProbability,homePregameElo,homePostgameElo,awayId,awayTeam,awayClassification,awayConference,awayPoints,awayLineScores,awayPostgameWinProbability,awayPregameElo,awayPostgameElo,excitementIndex,highlights,notes
+401756846,2025,1,regular,2025-08-23T16:00:00.000Z,FALSE,FALSE,TRUE,TRUE,,3504,Aviva Stadium,2306,Kansas State,fbs,Big 12,,,,1669,,66,Iowa State,fbs,Big 12,,,,1616,,,,Aer Lingus College Football Classic
+401767476,2025,1,regular,2025-08-23T17:00:00.000Z,FALSE,FALSE,FALSE,TRUE,,3779,Manning Field at John L. Guidry Stadium,2447,Nicholls,fcs,Southland,,,,,,2916,Incarnate Word,fcs,Southland,,,,,,,,
+401760371,2025,1,regular,2025-08-23T20:00:00.000Z,FALSE,FALSE,FALSE,FALSE,,6501,Allegiant Stadium,2439,UNLV,fbs,Mountain West,,,,,,304,Idaho State,fcs,Big Sky,,,,,,,,
+401767126,2025,1,regular,2025-08-23T20:30:00.000Z,FALSE,FALSE,FALSE,FALSE,,4765,Hillsboro Stadium,2502,Portland State,fcs,Big Sky,,,,,,2627,Tarleton State,fcs,UAC,,,,,,,,
+401756847,2025,1,regular,2025-08-23T22:30:00.000Z,FALSE,FALSE,FALSE,FALSE,,3833,Memorial Stadium,2305,Kansas,fbs,Big 12,,,,1583,,278,Fresno State,fbs,Mountain West,,,,1490,,,,
+401767135,2025,1,regular,2025-08-23T23:00:00.000Z,FALSE,FALSE,TRUE,FALSE,,3689,Cramton Bowl,2382,Mercer,fcs,Southern,,,,,,302,UC Davis,fcs,Big Sky,,,,,,,,FCS Kickoff
+401757218,2025,1,regular,2025-08-23T23:00:00.000Z,FALSE,FALSE,FALSE,TRUE,,3796,Houchens Industries-L.T. Smith Stadium,98,Western Kentucky,fbs,Conference USA,,,,1409,,2534,Sam Houston,fbs,Conference USA,,,,1452,,,,
+401754516,2025,1,regular,2025-08-23T23:30:00.000Z,FALSE,FALSE,FALSE,FALSE,,7220,Clarence T.C. Ching Athletics Complex,62,Hawai'i,fbs,Mountain West,,,,1257,,24,Stanford,fbs,ACC,,,,1283,,,,
+401767410,2025,1,regular,2025-08-23T23:30:00.000Z,FALSE,FALSE,TRUE,FALSE,,4246,Center Parc Stadium,2582,Southern,fcs,SWAC,,,,,,2428,North Carolina Central,fcs,MEAC,,,,,,,,Cricket MEAC/SWAC Challenge Kickoff
