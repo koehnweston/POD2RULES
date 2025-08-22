@@ -136,7 +136,7 @@ def display_scoreboard():
     """Loads scoreboard data from the database and displays it."""
     st.header("🏆 Overall Standings")
     try:
-        conn = st.connection("db", type="sql", ttl="10m")
+        conn = st.connection("db", type="sql")
         df = conn.query("SELECT * FROM scoreboard;")
 
         if df.empty:
@@ -305,3 +305,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
