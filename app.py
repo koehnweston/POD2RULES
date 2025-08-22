@@ -78,6 +78,8 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
+    # Today's date is Aug 22, 2025. Season start is Aug 18, 2025.
+    # (22 - 18) = 4 days. 4 // 7 = 0. So current week is 0.
     season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
     days_since_start = (today - season_start_date).days
@@ -226,14 +228,14 @@ def display_scoreboard():
 
     df = pd.DataFrame.from_dict(scoreboard_data, orient='index').fillna(0)
     week_cols = sorted([col for col in df.columns if col.isdigit()], key=int)
-    
+
     if not week_cols:
         st.warning("No weekly win data found in the scoreboard.")
         return
-        
+
     df['Total Wins'] = df[week_cols].sum(axis=1)
     df = df.sort_values(by='Total Wins', ascending=False)
-    
+
     # Reorder columns for better presentation
     display_cols = week_cols + ['Total Wins']
     df = df[display_cols]
@@ -280,7 +282,7 @@ def main_app():
 
         if st.button("📊 View Team Analytics", use_container_width=True):
             display_analytics()
-        
+
         st.divider()
         st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
 
@@ -316,7 +318,7 @@ def main_app():
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
             picks_data.append({
-                "Select": False if opponent == "BYE WEEK" else True,
+                "Select": False,  # CORRECTED: All teams are de-selected by default.
                 "My Team": team,
                 "Opponent": opponent
             })
@@ -358,7 +360,7 @@ def main_app():
                 num_picks = len(selected_teams)
                 if current_week > 0 and num_picks != 6:
                     st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**. Please confirm before exporting.")
-                
+
                 if current_week == 0:
                     content = (f"--- WEEK 0 FUTURE PICKS ---\nUser: {st.session_state.username}\n\n"
                                f"The following picks are to be applied during the respective team's first bye week:\n{'='*30}\n")
@@ -377,20 +379,20 @@ def main_app():
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
         st.markdown("Select a completed week and click the button to fetch game results and update the standings. This may take a moment.")
-        
+
         max_week = get_current_week()
         week_to_update = st.selectbox(
             "Select week to update scores",
-            options=range(max_week), # Only allow updating past weeks
-            index=max_week - 1 if max_week > 0 else 0,
-            disabled=(max_week == 0)
+            options=range(max_week + 1), # Allow updating the current week
+            index=max_week if max_week >= 0 else 0,
+            disabled=(max_week < 0)
         )
-        
-        if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week == 0)):
+
+        if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week < 0)):
             current_year = datetime.datetime.now().year
             update_scoreboard(week_to_update, current_year)
             st.rerun() # Force display to refresh with new data
-            
+
         st.divider()
         display_scoreboard()
 
