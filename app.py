@@ -33,6 +33,7 @@ USERS = {
     "Brayson": "pass123"
 }
 SCOREBOARD_DB = "scoreboard.json"
+PICKS_DB = "all_picks.json" # New central database for all picks
 
 # --- Helper Functions (with Caching) ---
 
@@ -43,11 +44,8 @@ def load_secrets():
     - First, it tries st.secrets, which is the default for Streamlit Community Cloud.
     - As a fallback for local development, it looks for a 'secrets.toml' file in the root directory.
     """
-    # Check for secrets managed by Streamlit (for deployed apps)
     if hasattr(st, 'secrets') and st.secrets:
         return st.secrets
-
-    # Fallback for local development
     secrets_file_path = "secrets.toml"
     if os.path.exists(secrets_file_path):
         try:
@@ -78,8 +76,6 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # Today's date is Aug 22, 2025. Season start is Aug 18, 2025.
-    # (22 - 18) = 4 days. 4 // 7 = 0. So current week is 0.
     season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
     days_since_start = (today - season_start_date).days
@@ -90,12 +86,10 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
-    app_secrets = load_secrets() # Use the new secrets loader
-
+    app_secrets = load_secrets()
     if "api_key" not in app_secrets:
         st.error("API key not found. Please add it to your secrets.toml file or deployment settings.")
         return None, "API key not configured."
-
     headers = {'accept': 'application/json', 'Authorization': app_secrets["api_key"]}
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
@@ -106,7 +100,7 @@ def fetch_api_data(endpoint, params):
     except requests.exceptions.RequestException as e:
         return None, f"Connection Error: Could not connect to the API. {e}"
 
-@st.cache_data(ttl=3600)  # Cache results for 1 hour to avoid excessive API calls
+@st.cache_data(ttl=3600)
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
@@ -116,7 +110,6 @@ def fetch_game_results(year, week):
     if not games_data:
         st.warning(f"No game data found for Week {week}.")
         return set()
-
     winning_teams = set()
     for game in games_data:
         if game.get('home_points') is not None and game.get('away_points') is not None:
@@ -144,23 +137,43 @@ def fetch_betting_lines(year, week):
     st.session_state.weekly_lines_cache[week] = processed_lines
     st.success(f"Fetched betting lines for {len(lines_data)} games.")
 
-# --- Scoreboard Logic ---
+# --- Picks & Scoreboard Logic ---
 
-def parse_weekly_picks(week, picks_dir="."):
-    """Parses all user pick files for a given week from the local directory."""
-    all_user_picks = {}
-    pattern = re.compile(f"Picks_(.*?)_Week{week}_.*\\.txt")
+def save_picks_to_db(username, week, selected_teams):
+    """Saves a user's picks for a given week to the JSON database."""
     try:
-        for filename in os.listdir(picks_dir):
-            match = pattern.match(filename)
-            if match:
-                username = match.group(1)
-                with open(os.path.join(picks_dir, filename), 'r') as f:
-                    picks = [line.strip("- \n") for line in f if line.startswith("- ")]
-                    all_user_picks[username] = picks
-    except FileNotFoundError:
-        st.error(f"Picks directory '{picks_dir}' not found.")
-    return all_user_picks
+        with open(PICKS_DB, 'r', encoding='utf-8') as f:
+            all_picks = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        all_picks = {}
+
+    if username not in all_picks:
+        all_picks[username] = {}
+
+    all_picks[username][str(week)] = selected_teams
+
+    try:
+        with open(PICKS_DB, 'w', encoding='utf-8') as f:
+            json.dump(all_picks, f, indent=4)
+        st.success(f"✅ Successfully saved your {len(selected_teams)} picks for Week {week}!")
+    except IOError as e:
+        st.error(f"Failed to save picks: {e}")
+
+def parse_weekly_picks(week):
+    """MODIFIED: Parses all user picks for a given week from the JSON database."""
+    try:
+        with open(PICKS_DB, 'r', encoding='utf-8') as f:
+            all_picks = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # This is not an error if no one has made picks yet
+        return {}
+
+    weekly_picks = {}
+    for user, picks_by_week in all_picks.items():
+        if str(week) in picks_by_week:
+            weekly_picks[user] = picks_by_week[str(week)]
+
+    return weekly_picks
 
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the scoreboard JSON file."""
@@ -170,9 +183,9 @@ def update_scoreboard(week, year):
             st.warning(f"Could not update scores for Week {week} as no game results were found.")
             return
 
-        user_picks = parse_weekly_picks(week)
+        user_picks = parse_weekly_picks(week) # Now reads from JSON DB
         if not user_picks:
-            st.warning(f"No user pick files found for Week {week}.")
+            st.warning(f"No user picks have been submitted for Week {week}.")
             return
 
         try:
@@ -235,8 +248,6 @@ def display_scoreboard():
 
     df['Total Wins'] = df[week_cols].sum(axis=1)
     df = df.sort_values(by='Total Wins', ascending=False)
-
-    # Reorder columns for better presentation
     display_cols = week_cols + ['Total Wins']
     df = df[display_cols]
 
@@ -265,7 +276,6 @@ def display_analytics():
                      user_teams_df[col] = user_teams_df[col].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
 
         st.dataframe(user_teams_df, use_container_width=True, hide_index=True)
-
     except FileNotFoundError:
         st.error("Error: 'returning_players_2025.csv' not found.")
     except Exception as e:
@@ -279,14 +289,11 @@ def main_app():
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
         st.dataframe(st.session_state.my_teams, hide_index=True, use_container_width=True, column_config={0:"Team"})
-
         if st.button("📊 View Team Analytics", use_container_width=True):
             display_analytics()
-
         st.divider()
         st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
 
-    # --- Main Page with Tabs ---
     tab1, tab2 = st.tabs(["Weekly Picks", "🏆 Scoreboard"])
 
     with tab1:
@@ -317,11 +324,7 @@ def main_app():
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
-            picks_data.append({
-                "Select": False,  # CORRECTED: All teams are de-selected by default.
-                "My Team": team,
-                "Opponent": opponent
-            })
+            picks_data.append({"Select": False, "My Team": team, "Opponent": opponent})
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
@@ -329,70 +332,43 @@ def main_app():
         lines_cache = st.session_state.weekly_lines_cache.get(current_week)
         if lines_cache and not schedule_df.empty:
             lines_to_display = []
-            user_games_df = schedule_df[
-                schedule_df['homeTeam'].isin(st.session_state.my_teams) | schedule_df['awayTeam'].isin(st.session_state.my_teams)
-            ]
+            user_games_df = schedule_df[schedule_df['homeTeam'].isin(st.session_state.my_teams) | schedule_df['awayTeam'].isin(st.session_state.my_teams)]
             for _, game in user_games_df.iterrows():
                 home_team, away_team = game['homeTeam'], game['awayTeam']
                 game_key = frozenset([str(home_team).lower().strip(), str(away_team).lower().strip()])
                 game_lines = lines_cache.get(game_key)
                 if game_lines:
                     line = game_lines[0]
-                    lines_to_display.append({
-                        "Home Team": home_team, "Away Team": away_team,
-                        "Spread": line.get('formattedSpread', 'N/A'), "Over/Under": line.get('overUnder', 'N/A')
-                    })
+                    lines_to_display.append({"Home Team": home_team, "Away Team": away_team, "Spread": line.get('formattedSpread', 'N/A'), "Over/Under": line.get('overUnder', 'N/A')})
             if lines_to_display:
                 st.markdown("##### Betting Lines Overview")
                 st.dataframe(pd.DataFrame(lines_to_display), hide_index=True, use_container_width=True)
                 st.divider()
 
         if not picks_df.empty:
-            edited_df = st.data_editor(
-                picks_df,
-                column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                disabled=["My Team", "Opponent"],
-                hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
-            )
+            edited_df = st.data_editor(picks_df, column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)}, disabled=["My Team", "Opponent"], hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}")
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
+            
             if selected_teams:
-                st.subheader("Export Your Picks")
+                st.subheader("Submit Your Picks")
                 num_picks = len(selected_teams)
                 if current_week > 0 and num_picks != 6:
-                    st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**. Please confirm before exporting.")
-
-                if current_week == 0:
-                    content = (f"--- WEEK 0 FUTURE PICKS ---\nUser: {st.session_state.username}\n\n"
-                               f"The following picks are to be applied during the respective team's first bye week:\n{'='*30}\n")
-                    content += "\n".join(f"- {team}" for team in selected_teams)
-                else:
-                    content = f"Picks for {st.session_state.username} - Week {current_week}\n{'='*30}\n"
-                    content += "\n".join(f"- {team}" for team in selected_teams)
-
-                filename = f"Picks_{st.session_state.username}_Week{current_week}_{datetime.date.today().strftime('%Y-%m-%d')}.txt"
-                st.download_button(
-                    label="📥 Export Picks to Text File", data=content, file_name=filename,
-                    mime="text/plain", use_container_width=True, type="primary"
-                )
+                    st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**. Please confirm before submitting.")
+                
+                # REPLACED download button with a submit button
+                if st.button(f"Submit {num_picks} Picks for Week {current_week}", use_container_width=True, type="primary"):
+                    save_picks_to_db(st.session_state.username, current_week, selected_teams)
 
     with tab2:
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
-        st.markdown("Select a completed week and click the button to fetch game results and update the standings. This may take a moment.")
-
+        st.markdown("Select a completed week and click the button to fetch game results and update the standings.")
         max_week = get_current_week()
-        week_to_update = st.selectbox(
-            "Select week to update scores",
-            options=range(max_week + 1), # Allow updating the current week
-            index=max_week if max_week >= 0 else 0,
-            disabled=(max_week < 0)
-        )
-
+        week_to_update = st.selectbox("Select week to update scores", options=range(max_week + 1), index=max_week, disabled=(max_week < 0))
         if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week < 0)):
             current_year = datetime.datetime.now().year
             update_scoreboard(week_to_update, current_year)
-            st.rerun() # Force display to refresh with new data
-
+            st.rerun()
         st.divider()
         display_scoreboard()
 
