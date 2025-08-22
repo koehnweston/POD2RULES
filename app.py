@@ -156,6 +156,25 @@ def display_scoreboard():
 
 # --- UI Component Functions ---
 
+
+
+def display_user_picks(user, week):
+    """Fetches and displays a user's picks for a given week from the database."""
+    st.subheader(f"Your Submitted Picks for Week {week}")
+    conn = st.connection("db", type="sql", ttl="10m")
+    picks_df = conn.query(
+        'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
+        params={"user": user, "week": week}
+    )
+    
+    if picks_df.empty:
+        st.info("You have not submitted any picks for this week yet.")
+    else:
+        # Rename column for better display
+        picks_df.rename(columns={'team': 'Selected Team'}, inplace=True)
+        st.dataframe(picks_df, hide_index=True, use_container_width=True)
+
+
 def display_login_form():
     """Displays the login form."""
     st.header("🏈 College Football Weekly Picks")
@@ -283,3 +302,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
