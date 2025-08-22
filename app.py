@@ -199,6 +199,8 @@ def main_app():
 
     tab1, tab2 = st.tabs(["Weekly Picks", "🏆 Scoreboard"])
 
+    # ... inside the main_app() function ...
+
     with tab1:
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
@@ -250,26 +252,27 @@ def main_app():
                 user = st.session_state.username
                 
                 with conn.session as s:
-                    # Delete old picks
                     s.execute(
                         text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
                         params=dict(user=user, week=current_week)
                     )
-                    # Insert new picks
+                    
                     for team in selected_teams:
                         s.execute(
                             text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'),
                             params=dict(user=user, week=current_week, team=team)
                         )
                     s.commit()
-
-                # *** NEW: Explicitly clear the connection's cache ***
-                conn.clear()
                 
                 st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
                 
-                # *** NEW: Immediately display the picks that were just submitted ***
-                display_user_picks(user, current_week)
+                # *** NEW: Force a full page refresh to clear all caches and states ***
+                st.rerun()
+
+            st.divider()
+            # This button now lets you view your picks after the page has reloaded
+            if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
+                display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
@@ -308,5 +311,6 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
