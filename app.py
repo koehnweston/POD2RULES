@@ -12,7 +12,6 @@ import requests
 import datetime
 import re
 import os
-import json
 from collections import defaultdict
 import toml
 # NEW: Import the Google Sheets connection component
@@ -34,7 +33,6 @@ USERS = {
     "Rian": "pass123", "Tucker": "pass123", "Aaron": "pass123",
     "Brayson": "pass123"
 }
-# REMOVED: SCOREBOARD_DB constant is no longer needed.
 
 # --- Helper Functions (with Caching) ---
 
@@ -138,7 +136,6 @@ def fetch_betting_lines(year, week):
 
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the Google Sheet."""
-    # Establish connection to Google Sheets
     conn = st.connection("gsheets", type=GSheetsConnection)
     
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
@@ -147,7 +144,6 @@ def update_scoreboard(week, year):
             st.warning(f"Could not update scores for Week {week} as no game results were found.")
             return
 
-        # Read all picks from the Google Sheet 'Picks' tab
         all_picks_df = conn.read(worksheet="Picks")
         week_picks_df = all_picks_df[all_picks_df["Week"] == week]
         
@@ -155,32 +151,25 @@ def update_scoreboard(week, year):
             st.warning(f"No user picks found in the database for Week {week}.")
             return
 
-        # Calculate wins for each user
         scores = {}
         for user in week_picks_df["User"].unique():
             user_picks = week_picks_df[week_picks_df["User"] == user]["Team"].tolist()
             wins = sum(1 for team in user_picks if team in winning_teams)
             scores[user] = wins
         
-        # Prepare new scores to be saved to the 'Scoreboard' tab
         new_scores_df = pd.DataFrame({
             "User": scores.keys(),
             "Week": week,
             "Wins": scores.values()
         })
 
-        # Read the existing scoreboard to avoid duplicates
         scoreboard_df = conn.read(worksheet="Scoreboard")
-        # Remove any old entries for this week
         scoreboard_df = scoreboard_df[scoreboard_df["Week"] != week]
-        # Add the newly calculated scores
         updated_scoreboard = pd.concat([scoreboard_df, new_scores_df], ignore_index=True)
         
-        # Write the entire updated scoreboard back to the sheet
         conn.update(worksheet="Scoreboard", data=updated_scoreboard)
         
         st.success(f"Scoreboard successfully updated for Week {week}!")
-        # Clear cache for the scoreboard so it re-fetches fresh data
         st.cache_data.clear()
 
 def display_scoreboard():
@@ -188,15 +177,13 @@ def display_scoreboard():
     st.header("🏆 Overall Standings")
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Fetch data and cache for 10 minutes to reduce API calls
         df = conn.read(worksheet="Scoreboard", usecols=[0, 1, 2], ttl="10m")
-        df.dropna(how="all", inplace=True) # Remove empty rows
+        df.dropna(how="all", inplace=True)
 
         if df.empty:
             st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
             return
         
-        # Pivot the table to get users as rows and weeks as columns
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         pivot_df['Total Wins'] = pivot_df.sum(axis=1)
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
@@ -224,7 +211,7 @@ def display_login_form():
 
 @st.dialog("Returning Player Analytics")
 def display_analytics():
-    # This function remains unchanged
+    """Displays analytics for the user's drafted teams."""
     st.subheader(f"Returning Production for {st.session_state.username}'s Teams")
     try:
         df = pd.read_csv("returning_players_2025.csv")
@@ -293,8 +280,7 @@ def main_app():
 
         st.subheader(f"Your Matchups for Week {current_week}")
 
-        # Betting lines display logic remains unchanged
-        # ...
+        # Betting lines display logic can be added here if needed
 
         if not picks_df.empty:
             edited_df = st.data_editor(
@@ -305,7 +291,6 @@ def main_app():
             )
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
             
-            # --- MODIFIED: Replaced download button with submit button ---
             if selected_teams:
                 st.subheader("Submit Your Picks")
                 num_picks = len(selected_teams)
@@ -319,8 +304,18 @@ def main_app():
                         "Team": selected_teams
                     })
                     
+                    # --- FINAL FIX IS HERE ---
                     conn = st.connection("gsheets", type=GSheetsConnection)
-                    conn.append(worksheet="Picks", data=picks_to_save, header=0)
+                    
+                    # 1. Read the existing data from the "Picks" worksheet
+                    existing_picks_df = conn.read(worksheet="Picks")
+                    
+                    # 2. Combine the old data with the new picks
+                    updated_picks_df = pd.concat([existing_picks_df, picks_to_save], ignore_index=True)
+                    
+                    # 3. Write the full, updated table back to the sheet
+                    conn.update(worksheet="Picks", data=updated_picks_df)
+                    
                     st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
 
     with tab2:
@@ -339,7 +334,6 @@ def main_app():
         if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week == 0)):
             current_year = datetime.datetime.now().year
             update_scoreboard(week_to_update, current_year)
-            # No rerun needed, scoreboard will refresh on next interaction or page load due to TTL
         
         st.divider()
         display_scoreboard()
