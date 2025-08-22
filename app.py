@@ -243,6 +243,15 @@ def display_analytics():
 
 def main_app():
     """The main application interface shown after a successful login."""
+
+    # --- TEMPORARY DEBUG CODE ---
+    st.header("🕵️ Secrets Debug View")
+    st.info("This is a temporary view to check if secrets are loaded correctly.")
+    st.write("Contents of st.secrets:")
+    st.json(st.secrets.to_dict())
+    # --- END OF DEBUG CODE ---
+
+    
     with st.sidebar:
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
@@ -361,4 +370,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
