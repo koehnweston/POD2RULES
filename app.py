@@ -6,8 +6,7 @@ import datetime
 import re
 import os
 from collections import defaultdict
-import toml
-from streamlit_gsheets import GSheetsConnection
+from sqlalchemy import text
 
 # --- Page and App Configuration ---
 
@@ -49,12 +48,9 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # Season start date is set to Friday, August 22, 2025. Week 1 games start the next day.
-    # The week calculation starts relative to the Monday of that week.
-    season_start_date = datetime.date(2025, 8, 18) 
+    season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
     days_since_start = (today - season_start_date).days
-    # Week 1 starts at day 0.
     current_week = (days_since_start // 7) + 1 if days_since_start >= 0 else 1
     return min(current_week, 15)
 
@@ -62,11 +58,11 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
-    if "secrets" not in st.secrets or "api_key" not in st.secrets.secrets:
+    if "api_key" not in st.secrets:
         st.error("API key not found. Please add it to your Streamlit app settings.")
         return None, "API key not configured."
 
-    auth_header_value = f"Bearer {st.secrets.secrets.api_key}"
+    auth_header_value = f"Bearer {st.secrets.api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
     
     try:
@@ -97,58 +93,58 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['away_team'])
     return winning_teams
 
-# --- Scoreboard Logic (with Google Sheets) ---
+# --- Scoreboard Logic (with SQL Database) ---
 
 def update_scoreboard(week, year):
-    """Calculates scores for a week and updates the Google Sheet."""
-    conn = st.connection("gsheets", type=GSheetsConnection)
+    """Calculates scores for a week and updates the database."""
+    conn = st.connection("db", type="sql")
     
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
         if not winning_teams:
             return
 
-        all_picks_df = conn.read(worksheet="Picks")
-        week_picks_df = all_picks_df[all_picks_df["Week"] == week]
+        all_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {week};")
         
-        if week_picks_df.empty:
+        if all_picks_df.empty:
             st.warning(f"No user picks found in the database for Week {week}.")
             return
 
         scores = {}
-        for user in week_picks_df["User"].unique():
-            user_picks = week_picks_df[week_picks_df["User"] == user]["Team"].tolist()
+        for user in all_picks_df["user"].unique():
+            user_picks = all_picks_df[all_picks_df["user"] == user]["team"].tolist()
             wins = sum(1 for team in user_picks if team in winning_teams)
             scores[user] = wins
         
-        new_scores_df = pd.DataFrame({
-            "User": scores.keys(),
-            "Week": week,
-            "Wins": scores.values()
-        })
-
-        scoreboard_df = conn.read(worksheet="Scoreboard")
-        # Remove any existing scores for this week before adding the new ones
-        scoreboard_df = scoreboard_df[scoreboard_df["Week"] != week]
-        updated_scoreboard = pd.concat([scoreboard_df, new_scores_df], ignore_index=True)
-        
-        conn.update(worksheet="Scoreboard", data=updated_scoreboard)
-        
+        # Use a session to execute delete and inserts in a transaction
+        with conn.session as s:
+            # Delete old scores for the week to prevent duplicates
+            s.execute(text(f"DELETE FROM scoreboard WHERE week = {week};"))
+            
+            # Insert new scores
+            for user, wins in scores.items():
+                s.execute(
+                    text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'),
+                    params=dict(user=user, week=week, wins=wins)
+                )
+            s.commit()
+            
         st.success(f"Scoreboard successfully updated for Week {week}!")
-        # Clear cache to ensure scoreboard reflects the latest update
         st.cache_data.clear()
 
 def display_scoreboard():
-    """Loads scoreboard data from Google Sheets and displays it."""
+    """Loads scoreboard data from the database and displays it."""
     st.header("🏆 Overall Standings")
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Scoreboard", usecols=[0, 1, 2], ttl="10m")
-        df.dropna(how="all", inplace=True)
+        conn = st.connection("db", type="sql", ttl="10m")
+        df = conn.query("SELECT * FROM scoreboard;")
 
         if df.empty:
             st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
             return
+        
+        # Rename columns to match pivot table expectations if necessary
+        df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         pivot_df['Total Wins'] = pivot_df.sum(axis=1)
@@ -156,7 +152,7 @@ def display_scoreboard():
         
         st.dataframe(pivot_df, use_container_width=True)
     except Exception as e:
-        st.error(f"Could not connect to or read from Google Sheets: {e}")
+        st.error(f"Could not connect to or read from the database: {e}")
 
 # --- UI Component Functions ---
 
@@ -182,7 +178,6 @@ def main_app():
     with st.sidebar:
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
-        # Convert list to DataFrame for better display
         my_teams_df = pd.DataFrame(st.session_state.my_teams, columns=["Team"])
         st.dataframe(my_teams_df, hide_index=True, use_container_width=True)
         st.divider()
@@ -194,7 +189,7 @@ def main_app():
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
-            options=[f"Week {i}" for i in range(1, 16)], # Weeks 1-15
+            options=[f"Week {i}" for i in range(1, 16)],
             index=get_current_week() - 1
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
@@ -231,26 +226,23 @@ def main_app():
                     st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
                 if st.button("✅ Submit My Picks for this Week", use_container_width=True, type="primary"):
-                    picks_to_save = pd.DataFrame({
-                        "User": [st.session_state.username] * num_picks,
-                        "Week": [current_week] * num_picks,
-                        "Team": selected_teams
-                    })
+                    conn = st.connection("db", type="sql")
+                    user = st.session_state.username
                     
-                    conn = st.connection("gsheets", type=GSheetsConnection)
-                    
-                    # Read existing picks to avoid duplicates
-                    existing_picks_df = conn.read(worksheet="Picks")
-                    
-                    # *** MODIFIED LOGIC ***
-                    # Filter out any pre-existing picks from this user for this week
-                    if not existing_picks_df.empty:
-                        condition = (existing_picks_df['User'] == st.session_state.username) & (existing_picks_df['Week'] == current_week)
-                        existing_picks_df = existing_picks_df[~condition]
-                    
-                    # Add the new picks
-                    updated_picks_df = pd.concat([existing_picks_df, picks_to_save], ignore_index=True)
-                    conn.update(worksheet="Picks", data=updated_picks_df)
+                    with conn.session as s:
+                        # First, delete any old picks for this user and week
+                        s.execute(
+                            text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
+                            params=dict(user=user, week=current_week)
+                        )
+                        
+                        # Then, insert the new picks
+                        for team in selected_teams:
+                            s.execute(
+                                text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'),
+                                params=dict(user=user, week=current_week, team=team)
+                            )
+                        s.commit()
                     
                     st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
 
@@ -259,9 +251,8 @@ def main_app():
         st.subheader("Update Weekly Scores")
         st.markdown("Select a completed week and click the button to update the standings.")
         
-        # Determine the maximum week that can be updated (last week)
         max_week = get_current_week()
-        updatable_weeks = range(1, max_week) # Can only update weeks that have passed
+        updatable_weeks = range(1, max_week)
         
         if not updatable_weeks:
             st.info("No past weeks are available to update yet.")
@@ -291,5 +282,4 @@ if st.session_state.logged_in:
         st.session_state.my_teams = all_picks.get(st.session_state.username, [])
     main_app()
 else:
-    # *** SYNTAX CORRECTION ***
     display_login_form()
