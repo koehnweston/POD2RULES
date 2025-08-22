@@ -14,6 +14,7 @@ import re
 import os
 import json
 from collections import defaultdict
+import toml # Added for local secrets.toml loading
 
 # --- Page and App Configuration ---
 
@@ -35,6 +36,27 @@ PLAYER_STATS_DB = "player_stats_2024.json"
 SCOREBOARD_DB = "scoreboard.json"
 
 # --- Helper Functions (with Caching) ---
+
+@st.cache_resource
+def load_secrets():
+    """
+    Loads secrets for the app.
+    - First, it tries st.secrets, which is the default for Streamlit Community Cloud.
+    - As a fallback for local development, it looks for a 'secrets.toml' file in the root directory.
+    """
+    # Check for secrets managed by Streamlit (for deployed apps)
+    if hasattr(st, 'secrets') and st.secrets:
+        return st.secrets
+
+    # Fallback for local development
+    secrets_file_path = "secrets.toml"
+    if os.path.exists(secrets_file_path):
+        try:
+            return toml.load(secrets_file_path)
+        except Exception as e:
+            st.error(f"Error loading local secrets.toml file: {e}")
+            return {}
+    return {}
 
 @st.cache_data
 def parse_draft_summary(file_path="draft_summary.txt"):
@@ -67,11 +89,13 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
-    if "api_key" not in st.secrets:
-        st.error("API key not found. Please add it to your secrets.toml file.")
+    app_secrets = load_secrets() # Use the new secrets loader
+
+    if "api_key" not in app_secrets:
+        st.error("API key not found. Please add it to your secrets.toml file or deployment settings.")
         return None, "API key not configured."
 
-    headers = {'accept': 'application/json', 'Authorization': st.secrets["api_key"]}
+    headers = {'accept': 'application/json', 'Authorization': app_secrets["api_key"]}
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
@@ -255,7 +279,7 @@ def display_analytics():
         for col in user_teams_df.columns:
             if 'percent' in col.lower() or 'usage' in col.lower():
                  if pd.api.types.is_numeric_dtype(user_teams_df[col]):
-                    user_teams_df[col] = user_teams_df[col].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
+                     user_teams_df[col] = user_teams_df[col].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
 
         st.dataframe(user_teams_df, use_container_width=True, hide_index=True)
 
