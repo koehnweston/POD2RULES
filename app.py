@@ -49,10 +49,13 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    season_start_date = datetime.date(2025, 8, 18)
+    # Season start date is set to Friday, August 22, 2025. Week 1 games start the next day.
+    # The week calculation starts relative to the Monday of that week.
+    season_start_date = datetime.date(2025, 8, 18) 
     today = datetime.date.today()
     days_since_start = (today - season_start_date).days
-    current_week = (days_since_start // 7) if days_since_start >= 0 else 0
+    # Week 1 starts at day 0.
+    current_week = (days_since_start // 7) + 1 if days_since_start >= 0 else 1
     return min(current_week, 15)
 
 # --- API & Data Fetching Functions ---
@@ -125,12 +128,14 @@ def update_scoreboard(week, year):
         })
 
         scoreboard_df = conn.read(worksheet="Scoreboard")
+        # Remove any existing scores for this week before adding the new ones
         scoreboard_df = scoreboard_df[scoreboard_df["Week"] != week]
         updated_scoreboard = pd.concat([scoreboard_df, new_scores_df], ignore_index=True)
         
         conn.update(worksheet="Scoreboard", data=updated_scoreboard)
         
         st.success(f"Scoreboard successfully updated for Week {week}!")
+        # Clear cache to ensure scoreboard reflects the latest update
         st.cache_data.clear()
 
 def display_scoreboard():
@@ -177,7 +182,9 @@ def main_app():
     with st.sidebar:
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
-        st.dataframe(st.session_state.my_teams, hide_index=True, use_container_width=True, column_config={0:"Team"})
+        # Convert list to DataFrame for better display
+        my_teams_df = pd.DataFrame(st.session_state.my_teams, columns=["Team"])
+        st.dataframe(my_teams_df, hide_index=True, use_container_width=True)
         st.divider()
         st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
 
@@ -187,17 +194,17 @@ def main_app():
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
-            options=[f"Week {i}" for i in range(16)],
-            index=get_current_week()
+            options=[f"Week {i}" for i in range(1, 16)], # Weeks 1-15
+            index=get_current_week() - 1
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
         try:
-            schedule_df = pd.read_csv(f"2025_week_{current_week}.csv")
+            schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
             matchups = {row['homeTeam']: row['awayTeam'] for _, row in schedule_df.iterrows()}
             matchups.update({row['awayTeam']: row['homeTeam'] for _, row in schedule_df.iterrows()})
         except FileNotFoundError:
-            st.warning(f"Schedule file '2025_week_{current_week}.csv' not found.")
+            st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
         picks_data = []
@@ -232,7 +239,16 @@ def main_app():
                     
                     conn = st.connection("gsheets", type=GSheetsConnection)
                     
+                    # Read existing picks to avoid duplicates
                     existing_picks_df = conn.read(worksheet="Picks")
+                    
+                    # *** MODIFIED LOGIC ***
+                    # Filter out any pre-existing picks from this user for this week
+                    if not existing_picks_df.empty:
+                        condition = (existing_picks_df['User'] == st.session_state.username) & (existing_picks_df['Week'] == current_week)
+                        existing_picks_df = existing_picks_df[~condition]
+                    
+                    # Add the new picks
                     updated_picks_df = pd.concat([existing_picks_df, picks_to_save], ignore_index=True)
                     conn.update(worksheet="Picks", data=updated_picks_df)
                     
@@ -243,16 +259,21 @@ def main_app():
         st.subheader("Update Weekly Scores")
         st.markdown("Select a completed week and click the button to update the standings.")
         
+        # Determine the maximum week that can be updated (last week)
         max_week = get_current_week()
-        week_to_update = st.selectbox(
-            "Select week to update scores",
-            options=range(max_week),
-            index=max_week - 1 if max_week > 0 else 0,
-            disabled=(max_week == 0)
-        )
+        updatable_weeks = range(1, max_week) # Can only update weeks that have passed
         
-        if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week == 0)):
-            update_scoreboard(week_to_update, datetime.datetime.now().year)
+        if not updatable_weeks:
+            st.info("No past weeks are available to update yet.")
+        else:
+            week_to_update = st.selectbox(
+                "Select week to update scores",
+                options=updatable_weeks,
+                index=len(updatable_weeks) - 1,
+            )
+            
+            if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
+                update_scoreboard(week_to_update, datetime.datetime.now().year)
         
         st.divider()
         display_scoreboard()
@@ -270,4 +291,5 @@ if st.session_state.logged_in:
         st.session_state.my_teams = all_picks.get(st.session_state.username, [])
     main_app()
 else:
+    # *** SYNTAX CORRECTION ***
     display_login_form()
