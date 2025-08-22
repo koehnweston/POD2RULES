@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Aug 22 07:50:31 2025
-
-@author: koehn
-"""
-
 # app.py
 import streamlit as st
 import pandas as pd
@@ -34,20 +27,6 @@ USERS = {
 }
 
 # --- Helper Functions (with Caching) ---
-
-@st.cache_resource
-def load_secrets():
-    """Loads secrets for the app."""
-    if hasattr(st, 'secrets') and st.secrets:
-        return st.secrets
-    secrets_file_path = "secrets.toml"
-    if os.path.exists(secrets_file_path):
-        try:
-            return toml.load(secrets_file_path)
-        except Exception as e:
-            st.error(f"Error loading local secrets.toml file: {e}")
-            return {}
-    return {}
 
 @st.cache_data
 def parse_draft_summary(file_path="draft_summary.txt"):
@@ -81,7 +60,7 @@ def get_current_week():
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
     if "secrets" not in st.secrets or "api_key" not in st.secrets.secrets:
-        st.error("API key not found. Please add it to your secrets under a [secrets] heading.")
+        st.error("API key not found. Please add it to your Streamlit app settings.")
         return None, "API key not configured."
 
     auth_header_value = f"Bearer {st.secrets.secrets.api_key}"
@@ -92,9 +71,9 @@ def fetch_api_data(endpoint, params):
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as e:
-        return None, f"API request failed: {e.response.status_code} - {e.response.text}. Check if your API key is correct and active."
+        return None, f"API request failed: {e.response.status_code} - {e.response.text}."
     except requests.exceptions.RequestException as e:
-        return None, f"Connection Error: Could not connect to the API. {e}"
+        return None, f"Connection Error: {e}"
 
 @st.cache_data(ttl=3600)
 def fetch_game_results(year, week):
@@ -115,24 +94,6 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['away_team'])
     return winning_teams
 
-def fetch_betting_lines(year, week):
-    """Fetch betting lines for a specific year and week."""
-    lines_data, error = fetch_api_data("lines", {'year': year, 'week': week})
-    if error:
-        st.error(error)
-        return
-    if not lines_data:
-        st.info(f"No betting lines found for Week {week}.")
-        return
-    processed_lines = defaultdict(list)
-    for game in lines_data:
-        home_team_std = str(game['homeTeam']).lower().strip()
-        away_team_std = str(game['awayTeam']).lower().strip()
-        game_key = frozenset([home_team_std, away_team_std])
-        processed_lines[game_key].extend(game['lines'])
-    st.session_state.weekly_lines_cache[week] = processed_lines
-    st.success(f"Fetched betting lines for {len(lines_data)} games.")
-
 # --- Scoreboard Logic (with Google Sheets) ---
 
 def update_scoreboard(week, year):
@@ -142,7 +103,6 @@ def update_scoreboard(week, year):
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
         if not winning_teams:
-            st.warning(f"Could not update scores for Week {week} as no game results were found.")
             return
 
         all_picks_df = conn.read(worksheet="Picks")
@@ -191,7 +151,7 @@ def display_scoreboard():
         
         st.dataframe(pivot_df, use_container_width=True)
     except Exception as e:
-        st.error(f"Could not connect to or read from Google Sheets. Please ensure your credentials are correct. Error: {e}")
+        st.error(f"Could not connect to or read from Google Sheets: {e}")
 
 # --- UI Component Functions ---
 
@@ -210,29 +170,6 @@ def display_login_form():
             else:
                 st.error("Invalid username or password.")
 
-@st.dialog("Returning Player Analytics")
-def display_analytics():
-    """Displays analytics for the user's drafted teams."""
-    st.subheader(f"Returning Production for {st.session_state.username}'s Teams")
-    try:
-        df = pd.read_csv("returning_players_2025.csv")
-        my_teams = st.session_state.my_teams
-        drafted_teams_std = [str(team).lower().strip() for team in my_teams]
-        df['team_standardized'] = df['team'].astype(str).str.lower().str.strip()
-        user_teams_df = df[df['team_standardized'].isin(drafted_teams_std)].drop(columns=['team_standardized'])
-        if user_teams_df.empty:
-            st.warning("No analytics data found for your drafted teams.")
-            return
-        for col in user_teams_df.columns:
-            if 'percent' in col.lower() or 'usage' in col.lower():
-                if pd.api.types.is_numeric_dtype(user_teams_df[col]):
-                    user_teams_df[col] = user_teams_df[col].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
-        st.dataframe(user_teams_df, use_container_width=True, hide_index=True)
-    except FileNotFoundError:
-        st.error("Error: 'returning_players_2025.csv' not found.")
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
-
 # --- Main Application Logic ---
 
 def main_app():
@@ -241,8 +178,6 @@ def main_app():
         st.header(f"🏈 Welcome, {st.session_state.username}!")
         st.write("Your Drafted Teams:")
         st.dataframe(st.session_state.my_teams, hide_index=True, use_container_width=True, column_config={0:"Team"})
-        if st.button("📊 View Team Analytics", use_container_width=True):
-            display_analytics()
         st.divider()
         st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
 
@@ -250,19 +185,12 @@ def main_app():
 
     with tab1:
         st.title("Weekly Picks Selection")
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            st.session_state.week_selection = st.selectbox(
-                "Select Week",
-                options=[f"Week {i}" for i in range(16)],
-                index=get_current_week()
-            )
-        current_week = int(st.session_state.week_selection.split(" ")[1])
+        current_week = int(st.selectbox(
+            "Select Week",
+            options=[f"Week {i}" for i in range(16)],
+            index=get_current_week()
+        ).split(" ")[1])
         current_year = datetime.datetime.now().year
-        with col2:
-            if st.button("📡 Fetch Betting Lines", use_container_width=True):
-                with st.spinner(f"Fetching lines for Week {current_week}..."):
-                    fetch_betting_lines(current_year, current_week)
 
         try:
             schedule_df = pd.read_csv(f"2025_week_{current_week}.csv")
@@ -270,7 +198,6 @@ def main_app():
             matchups.update({row['awayTeam']: row['homeTeam'] for _, row in schedule_df.iterrows()})
         except FileNotFoundError:
             st.warning(f"Schedule file '2025_week_{current_week}.csv' not found.")
-            schedule_df = pd.DataFrame()
             matchups = {}
 
         picks_data = []
@@ -325,8 +252,7 @@ def main_app():
         )
         
         if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary", disabled=(max_week == 0)):
-            current_year = datetime.datetime.now().year
-            update_scoreboard(week_to_update, current_year)
+            update_scoreboard(week_to_update, datetime.datetime.now().year)
         
         st.divider()
         display_scoreboard()
@@ -335,8 +261,6 @@ def main_app():
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-if 'weekly_lines_cache' not in st.session_state:
-    st.session_state.weekly_lines_cache = {}
 
 # --- Main Render Logic ---
 
