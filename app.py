@@ -250,23 +250,26 @@ def main_app():
                 user = st.session_state.username
                 
                 with conn.session as s:
+                    # Delete old picks
                     s.execute(
                         text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
                         params=dict(user=user, week=current_week)
                     )
-                    
+                    # Insert new picks
                     for team in selected_teams:
                         s.execute(
                             text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'),
                             params=dict(user=user, week=current_week, team=team)
                         )
                     s.commit()
+
+                # *** NEW: Explicitly clear the connection's cache ***
+                conn.clear()
                 
                 st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
-
-            st.divider()
-            if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
-                display_user_picks(st.session_state.username, current_week)
+                
+                # *** NEW: Immediately display the picks that were just submitted ***
+                display_user_picks(user, current_week)
 
     with tab2:
         st.title("League Scoreboard")
@@ -305,4 +308,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
