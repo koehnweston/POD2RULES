@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -48,13 +47,15 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # Set to a date in 2025 for consistent testing
+    # Using a fixed date for consistent behavior.
+    # Today's date is August 23, 2025.
     season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
     # If today is before the season start, default to week 1
     if today < season_start_date:
         return 1
     days_since_start = (today - season_start_date).days
+    # Today is 5 days after the start. (5 // 7) + 1 = 1. So it's Week 1.
     current_week = (days_since_start // 7) + 1
     return min(current_week, 15)
 
@@ -131,7 +132,7 @@ def update_scoreboard(week, year):
 
         st.success(f"Scoreboard successfully updated for Week {week}!")
         st.cache_data.clear()
-        st.cache_resource.clear() # Clear connection cache after scoreboard update too
+        st.cache_resource.clear()
 
 def display_scoreboard():
     """Loads scoreboard data from the database and displays it."""
@@ -159,7 +160,7 @@ def display_scoreboard():
 def display_user_picks(user, week):
     """Fetches and displays a user's picks for a given week from the database."""
     st.subheader(f"Your Submitted Picks for Week {week}")
-    conn = st.connection("db", type="sql", ttl=0)
+    conn = st.connection("db", type="sql") # No ttl=0 needed here anymore
     picks_df = conn.query(
         'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
         params={"user": user, "week": week}
@@ -200,7 +201,6 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    # Simplified back to two tabs for a cleaner user experience
     tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
 
     with tab1:
@@ -213,7 +213,7 @@ def main_app():
         current_year = datetime.datetime.now().year
 
         # Always query the database for the true state of the picks
-        conn = st.connection("db", type="sql", ttl=0)
+        conn = st.connection("db", type="sql")
         existing_picks_df = conn.query(
             'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
             params={"user": st.session_state.username, "week": current_week}
@@ -245,7 +245,7 @@ def main_app():
                 disabled=["My Team", "Opponent"],
                 hide_index=True,
                 use_container_width=True,
-                key=f"picks_editor_{current_week}" # A simple key is sufficient
+                key=f"picks_editor_{current_week}"
             )
 
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
@@ -259,7 +259,8 @@ def main_app():
                             s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                         s.commit()
                     st.success("Picks submitted successfully!")
-                    # CRITICAL FIX: Clear the entire connection resource cache
+                    # THIS IS THE FIX: Clear both data and resource caches
+                    st.cache_data.clear()
                     st.cache_resource.clear()
                     st.rerun()
 
@@ -269,22 +270,23 @@ def main_app():
                         s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                         s.commit()
                     st.success("Picks cleared successfully!")
-                    # CRITICAL FIX: Clear the entire connection resource cache
+                    # THIS IS THE FIX: Clear both data and resource caches
+                    st.cache_data.clear()
                     st.cache_resource.clear()
                     st.rerun()
 
             st.divider()
-            # The confirmation view is now back on the same page and will be accurate
+            # This view will now be accurate after submission/clearing
             display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
         max_week = get_current_week()
-        updatable_weeks = range(1, max_week)
+        updatable_weeks = range(1, max_week + 1) # Allow updating the current week
 
         if not updatable_weeks:
-            st.info("No past weeks are available to update yet.")
+            st.info("No weeks are available to update yet.")
         else:
             week_to_update = st.selectbox(
                 "Select week to update scores",
