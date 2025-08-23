@@ -1,6 +1,4 @@
 import streamlit as st
-st.write("## Secrets Debugger")
-st.write(st.secrets.to_dict())
 import pandas as pd
 import requests
 import datetime
@@ -366,5 +364,6 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
