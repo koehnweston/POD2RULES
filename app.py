@@ -198,21 +198,24 @@ def main_app():
         my_teams_df = pd.DataFrame(st.session_state.my_teams, columns=["Team"])
         st.dataframe(my_teams_df, hide_index=True, use_container_width=True)
         st.divider()
-        st.button("Logout", on_click=lambda: st.session_state.clear(), use_container_width=True)
+        if st.button("Logout", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
 
-    # Simplified back to two tabs for a cleaner user experience
     tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
 
-    # --- TAB 1: MAKE AND VIEW PICKS ---
     with tab1:
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
             options=[f"Week {i}" for i in range(1, 16)],
-            # The current date is Aug 23, 2025, so this correctly defaults to Week 1
             index=get_current_week() - 1,
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
+
+        # Initialize a version key in session_state to force the editor to refresh
+        if f"editor_version_{current_week}" not in st.session_state:
+            st.session_state[f"editor_version_{current_week}"] = 0
 
         # Always query the database for the true state of the picks
         conn = st.connection("db", type="sql", ttl=0)
@@ -247,13 +250,11 @@ def main_app():
                 disabled=["My Team", "Opponent"],
                 hide_index=True,
                 use_container_width=True,
-                key=f"picks_editor_{current_week}" # A simple key is sufficient now
+                # CRITICAL: The key is now unique for each week AND each action
+                key=f"picks_editor_{current_week}_{st.session_state[f'editor_version_{current_week}']}"
             )
 
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
-            num_picks = len(selected_teams)
-            if num_picks != 6 and num_picks > 0:
-                 st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -264,8 +265,8 @@ def main_app():
                             s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                         s.commit()
                     st.success("Picks submitted successfully!")
-                    # --- CRITICAL FIX: Clear the entire connection resource cache ---
-                    st.cache_resource.clear()
+                    # Increment the key version to force a widget reset on rerun
+                    st.session_state[f"editor_version_{current_week}"] += 1
                     st.rerun()
 
             with col2:
@@ -274,13 +275,13 @@ def main_app():
                         s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                         s.commit()
                     st.success("Picks cleared successfully!")
-                    # --- CRITICAL FIX: Clear the entire connection resource cache ---
-                    st.cache_resource.clear()
+                    # Increment the key version to force a widget reset on rerun
+                    st.session_state[f"editor_version_{current_week}"] += 1
                     st.rerun()
 
             st.divider()
-            # The confirmation view is now back on the same page and will be accurate
             display_user_picks(st.session_state.username, current_week)
+
 
     # --- TAB 2: SCOREBOARD ---
     with tab2:
@@ -318,6 +319,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
