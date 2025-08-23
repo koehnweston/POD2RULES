@@ -202,8 +202,6 @@ def main_app():
 
     tab1, tab2 = st.tabs(["Weekly Picks", "🏆 Scoreboard"])
 
-    # ... inside the main_app() function ...
-
     with tab1:
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
@@ -213,15 +211,19 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
-        # --- NEW: Fetch existing picks to ensure the UI is always in sync with the database ---
-        conn = st.connection("db", type="sql", ttl=0) # ttl=0 ensures we always get fresh data
+        # --- Initialize a version key in session_state to force editor refresh ---
+        if 'editor_version' not in st.session_state:
+            st.session_state.editor_version = 0
+
+        # Fetch existing picks to ensure the UI is always in sync with the database
+        conn = st.connection("db", type="sql", ttl=0)
         existing_picks_df = conn.query(
             'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
             params={"user": st.session_state.username, "week": current_week}
         )
         existing_picks = set(existing_picks_df['team'])
 
-        # --- Load schedule data ---
+        # Load schedule data
         try:
             schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
             matchups = {row['homeTeam']: row['awayTeam'] for _, row in schedule_df.iterrows()}
@@ -230,7 +232,7 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
-        # --- MODIFIED: Pre-populate the DataFrame based on existing picks ---
+        # Pre-populate the DataFrame based on existing picks
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
@@ -248,7 +250,9 @@ def main_app():
                 disabled=["My Team", "Opponent"],
                 hide_index=True,
                 use_container_width=True,
-                key=f"picks_editor_{current_week}" # The key ensures state is maintained correctly per week
+                # --- MODIFIED KEY ---
+                # Add the version number to the key
+                key=f"picks_editor_{current_week}_{st.session_state.editor_version}"
             )
             
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
@@ -259,14 +263,14 @@ def main_app():
             if num_picks != 6 and num_picks > 0:
                  st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
-            # --- The submission logic remains the same ---
             if st.button(
                 "✅ Submit My Picks for this Week",
                 use_container_width=True,
                 type="primary",
                 disabled=not selected_teams
             ):
-                conn = st.connection("db", type="sql")
+                # Use ttl=0 on this connection as well, to be safe
+                conn = st.connection("db", type="sql", ttl=0)
                 user = st.session_state.username
                 
                 with conn.session as s:
@@ -283,11 +287,15 @@ def main_app():
                     s.commit()
                 
                 st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
-                st.rerun() # Rerun immediately reloads the tab with the new picks reflected above
+                
+                # --- NEW: Increment the version to invalidate the old editor state ---
+                st.session_state.editor_version += 1
+                
+                st.rerun()
 
             st.divider()
 
-            # --- REVISED: Always display the submitted picks instead of using a button ---
+            # This now serves as the confirmation view
             display_user_picks(st.session_state.username, current_week)
 
     with tab2:
@@ -327,6 +335,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
