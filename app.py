@@ -48,10 +48,14 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    season_start_date = datetime.date(2025, 8, 18)
+    # Set to a date in 2025 for consistent testing
+    season_start_date = datetime.date(2025, 8, 18) 
     today = datetime.date.today()
+    # If today is before the season start, default to week 1
+    if today < season_start_date:
+        return 1
     days_since_start = (today - season_start_date).days
-    current_week = (days_since_start // 7) + 1 if days_since_start >= 0 else 1
+    current_week = (days_since_start // 7) + 1
     return min(current_week, 15)
 
 # --- API & Data Fetching Functions ---
@@ -202,18 +206,21 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
+    # Add a dedicated "View My Picks" tab for clarity
+    tab1, tab2, tab3 = st.tabs(["✍️ Make Picks", "👀 View My Picks", "🏆 Scoreboard"])
 
+    # --- TAB 1: MAKE PICKS ---
     with tab1:
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
             options=[f"Week {i}" for i in range(1, 16)],
             index=get_current_week() - 1,
+            key="week_selector_tab1"
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
-        # Initialize a single, simple version counter for the editor's key
+        # Initialize a version counter to force the editor to reset
         if 'editor_version' not in st.session_state:
             st.session_state.editor_version = 0
 
@@ -243,7 +250,6 @@ def main_app():
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
-        # The data editor is now the single source of truth for viewing your picks on this page
         edited_df = st.data_editor(
             picks_df,
             column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
@@ -264,7 +270,7 @@ def main_app():
                     for team in selected_teams:
                         s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                     s.commit()
-                st.success("Picks submitted successfully!")
+                st.success("Picks submitted! Check the 'View My Picks' tab to confirm.")
                 # Increment the key version to force a widget reset
                 st.session_state.editor_version += 1
                 st.rerun()
@@ -279,12 +285,25 @@ def main_app():
                 st.session_state.editor_version += 1
                 st.rerun()
 
-
-    # --- TAB 2: SCOREBOARD ---
+    # --- TAB 2: VIEW MY PICKS ---
     with tab2:
+        st.title("Your Submitted Picks")
+        view_week = int(st.selectbox(
+            "Select Week to View",
+            options=[f"Week {i}" for i in range(1, 16)],
+            index=get_current_week() - 1,
+            key="week_selector_tab2"
+        ).split(" ")[1])
+        st.divider()
+        # This function provides a clean, read-only view of the database
+        display_user_picks(st.session_state.username, view_week)
+
+    # --- TAB 3: SCOREBOARD ---
+    with tab3:
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
-        # ... (rest of the scoreboard code is unchanged) ...
+        st.markdown("Select a completed week and click the button to update the standings.")
+        
         max_week = get_current_week()
         updatable_weeks = range(1, max_week)
         
@@ -296,11 +315,13 @@ def main_app():
                 options=updatable_weeks,
                 index=len(updatable_weeks) - 1,
             )
+            
             if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                 update_scoreboard(week_to_update, datetime.datetime.now().year)
         
         st.divider()
         display_scoreboard()
+
 
 # --- App Initialization and State Management ---
 
@@ -316,17 +337,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
