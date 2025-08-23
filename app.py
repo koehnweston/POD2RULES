@@ -213,6 +213,15 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
+        # --- NEW: Fetch existing picks to ensure the UI is always in sync with the database ---
+        conn = st.connection("db", type="sql", ttl=0) # ttl=0 ensures we always get fresh data
+        existing_picks_df = conn.query(
+            'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
+            params={"user": st.session_state.username, "week": current_week}
+        )
+        existing_picks = set(existing_picks_df['team'])
+
+        # --- Load schedule data ---
         try:
             schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
             matchups = {row['homeTeam']: row['awayTeam'] for _, row in schedule_df.iterrows()}
@@ -221,10 +230,13 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
+        # --- MODIFIED: Pre-populate the DataFrame based on existing picks ---
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
-            picks_data.append({"Select": False, "My Team": team, "Opponent": opponent})
+            is_selected = team in existing_picks
+            picks_data.append({"Select": is_selected, "My Team": team, "Opponent": opponent})
+        
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
@@ -234,7 +246,9 @@ def main_app():
                 picks_df,
                 column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
                 disabled=["My Team", "Opponent"],
-                hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
+                hide_index=True,
+                use_container_width=True,
+                key=f"picks_editor_{current_week}" # The key ensures state is maintained correctly per week
             )
             
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
@@ -245,6 +259,7 @@ def main_app():
             if num_picks != 6 and num_picks > 0:
                  st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
+            # --- The submission logic remains the same ---
             if st.button(
                 "✅ Submit My Picks for this Week",
                 use_container_width=True,
@@ -268,14 +283,12 @@ def main_app():
                     s.commit()
                 
                 st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
-                
-                # *** NEW: Force a full page refresh to clear all caches and states ***
-                st.rerun()
+                st.rerun() # Rerun immediately reloads the tab with the new picks reflected above
 
             st.divider()
-            # This button now lets you view your picks after the page has reloaded
-            if st.button("👀 View My Submitted Picks for this Week", use_container_width=True):
-                display_user_picks(st.session_state.username, current_week)
+
+            # --- REVISED: Always display the submitted picks instead of using a button ---
+            display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
@@ -314,6 +327,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
