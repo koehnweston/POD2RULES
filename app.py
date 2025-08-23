@@ -211,17 +211,21 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
-        # --- Initialize a version key in session_state to force editor refresh ---
-        if 'editor_version' not in st.session_state:
-            st.session_state.editor_version = 0
-
-        # Fetch existing picks to ensure the UI is always in sync with the database
-        conn = st.connection("db", type="sql", ttl=0)
-        existing_picks_df = conn.query(
-            'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
-            params={"user": st.session_state.username, "week": current_week}
-        )
-        existing_picks = set(existing_picks_df['team'])
+        # --- MODIFIED LOGIC: Prioritize recently submitted picks from session_state ---
+        # Check if we have just submitted picks for the current week
+        if 'last_submitted_week' in st.session_state and st.session_state.last_submitted_week == current_week:
+            existing_picks = st.session_state.last_submitted_picks
+            # Clear the state so a normal browser refresh will query the DB
+            del st.session_state['last_submitted_week']
+            del st.session_state['last_submitted_picks']
+        else:
+            # Otherwise, query the database as usual
+            conn = st.connection("db", type="sql", ttl=0)
+            existing_picks_df = conn.query(
+                'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
+                params={"user": st.session_state.username, "week": current_week}
+            )
+            existing_picks = set(existing_picks_df['team'])
 
         # Load schedule data
         try:
@@ -235,7 +239,7 @@ def main_app():
         # Pre-populate the DataFrame based on existing picks
         picks_data = []
         for team in st.session_state.my_teams:
-            opponent = matchups.get(team, "BYE WEEK")
+            opponent = matchups.get(team, "BY E WEEK")
             is_selected = team in existing_picks
             picks_data.append({"Select": is_selected, "My Team": team, "Opponent": opponent})
         
@@ -244,15 +248,14 @@ def main_app():
         st.subheader(f"Your Matchups for Week {current_week}")
 
         if not picks_df.empty:
+            # We no longer need the versioned key with this new state logic
             edited_df = st.data_editor(
                 picks_df,
                 column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
                 disabled=["My Team", "Opponent"],
                 hide_index=True,
                 use_container_width=True,
-                # --- MODIFIED KEY ---
-                # Add the version number to the key
-                key=f"picks_editor_{current_week}_{st.session_state.editor_version}"
+                key=f"picks_editor_{current_week}"
             )
             
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
@@ -269,7 +272,6 @@ def main_app():
                 type="primary",
                 disabled=not selected_teams
             ):
-                # Use ttl=0 on this connection as well, to be safe
                 conn = st.connection("db", type="sql", ttl=0)
                 user = st.session_state.username
                 
@@ -288,14 +290,14 @@ def main_app():
                 
                 st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
                 
-                # --- NEW: Increment the version to invalidate the old editor state ---
-                st.session_state.editor_version += 1
+                # --- NEW: Pass the submitted picks to the next run via session_state ---
+                st.session_state.last_submitted_week = current_week
+                st.session_state.last_submitted_picks = set(selected_teams)
                 
                 st.rerun()
 
             st.divider()
-
-            # This now serves as the confirmation view
+            
             display_user_picks(st.session_state.username, current_week)
 
     with tab2:
@@ -335,6 +337,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
