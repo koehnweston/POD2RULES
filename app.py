@@ -158,7 +158,10 @@ def display_scoreboard():
 def display_user_picks(user, week):
     """Fetches and displays a user's picks for a given week from the database."""
     st.subheader(f"Your Submitted Picks for Week {week}")
-    conn = st.connection("db", type="sql", ttl="10m")
+    
+    # Use ttl=0 to disable caching for this specific, time-sensitive query
+    conn = st.connection("db", type="sql", ttl=0) 
+    
     picks_df = conn.query(
         'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
         params={"user": user, "week": week}
@@ -287,7 +290,7 @@ def main_app():
         else:
             week_to_update = st.selectbox(
                 "Select week to update scores",
-                options=updatable_decks,
+                options=updatable_weeks,
                 index=len(updatable_weeks) - 1,
             )
             
@@ -311,6 +314,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
