@@ -61,16 +61,36 @@ def get_current_week():
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
-    if "api_key" not in st.secrets:
-        st.error("API key not found. Please add it to your Streamlit app settings.")
-        return None, "API key not configured."
+    
+    # --- New Debugging Section ---
+    st.write("--- Inside fetch_api_data function ---")
+    
+    # Let's see what secrets are visible right here
+    if hasattr(st.secrets, 'to_dict'):
+        st.write("Secrets visible here:", st.secrets.to_dict())
+    else:
+        st.write("st.secrets exists but has no to_dict method.")
 
-    auth_header_value = f"Bearer {st.secrets.api_key}"
+    # Now, let's try to access the key directly and provide a detailed error if it fails
+    try:
+        api_key = st.secrets["api_key"]
+        if not api_key or not isinstance(api_key, str):
+            st.error("Error: 'api_key' was found, but it is empty or not a string. Please check the value in your settings.")
+            return None, "API key value is invalid."
+    except Exception as e:
+        st.error(f"CRITICAL ERROR: Could not access st.secrets['api_key'] inside the function. Error: {e}")
+        st.error("This confirms the key is not available at this point in the code. Please double-check your secrets for any invisible characters or formatting issues.")
+        return None, "Failed to access API key within the function."
+    # --- End of Debugging Section ---
+
+    auth_header_value = f"Bearer {api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
 
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
+        # On success, clear the debug messages
+        st.empty() 
         return response.json(), None
     except requests.exceptions.HTTPError as e:
         return None, f"API request failed: {e.response.status_code} - {e.response.text}."
@@ -346,4 +366,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
