@@ -47,15 +47,11 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # Using a fixed date for consistent behavior.
-    # Today's date is August 23, 2025.
     season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
-    # If today is before the season start, default to week 1
     if today < season_start_date:
         return 1
     days_since_start = (today - season_start_date).days
-    # Today is 5 days after the start. (5 // 7) + 1 = 1. So it's Week 1.
     current_week = (days_since_start // 7) + 1
     return min(current_week, 15)
 
@@ -98,29 +94,56 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['away_team'])
     return winning_teams
 
+@st.cache_data(ttl=3600)
+def fetch_betting_lines(year, week):
+    """Fetches betting lines for a given week from the API."""
+    lines_data, error = fetch_api_data("lines", {'year': year, 'week': week, 'seasonType': 'regular'})
+    if error:
+        # Don't show a blocking error, just return empty if lines aren't ready
+        return {}
+    if not lines_data:
+        return {}
+
+    betting_lines = {}
+    for game in lines_data:
+        # Prefer the consensus line, but fall back to the first available line
+        line_to_use = None
+        if game.get('lines'):
+            consensus_lines = [line for line in game['lines'] if line.get('provider') == 'consensus']
+            if consensus_lines:
+                line_to_use = consensus_lines[0]
+            else:
+                line_to_use = game['lines'][0] # Fallback to the first provider
+        
+        if line_to_use and line_to_use.get('spread'):
+            home_team = game['homeTeam']
+            away_team = game['awayTeam']
+            # The spread is from the home team's perspective (e.g., -7.0 means home team is favored by 7)
+            spread = float(line_to_use['spread'])
+            
+            betting_lines[home_team] = spread
+            betting_lines[away_team] = -spread # The away team has the opposite spread
+
+    return betting_lines
+
 # --- Scoreboard Logic (with SQL Database) ---
 
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the database."""
     conn = st.connection("db", type="sql")
-
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
         if not winning_teams:
             return
-
         all_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {week};")
-
         if all_picks_df.empty:
             st.warning(f"No user picks found in the database for Week {week}.")
             return
-
         scores = {}
         for user in all_picks_df["user"].unique():
             user_picks = all_picks_df[all_picks_df["user"] == user]["team"].tolist()
             wins = sum(1 for team in user_picks if team in winning_teams)
             scores[user] = wins
-
         with conn.session as s:
             s.execute(text(f"DELETE FROM scoreboard WHERE week = {week};"))
             for user, wins in scores.items():
@@ -129,7 +152,6 @@ def update_scoreboard(week, year):
                     params=dict(user=user, week=week, wins=wins)
                 )
             s.commit()
-
         st.success(f"Scoreboard successfully updated for Week {week}!")
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -140,17 +162,13 @@ def display_scoreboard():
     try:
         conn = st.connection("db", type="sql")
         df = conn.query("SELECT * FROM scoreboard;")
-
         if df.empty:
             st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
             return
-
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
-
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         pivot_df['Total Wins'] = pivot_df.sum(axis=1)
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
-
         st.dataframe(pivot_df, use_container_width=True)
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -160,12 +178,11 @@ def display_scoreboard():
 def display_user_picks(user, week):
     """Fetches and displays a user's picks for a given week from the database."""
     st.subheader(f"Your Submitted Picks for Week {week}")
-    conn = st.connection("db", type="sql") # No ttl=0 needed here anymore
+    conn = st.connection("db", type="sql")
     picks_df = conn.query(
         'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
         params={"user": user, "week": week}
     )
-
     if picks_df.empty:
         st.info("You have not submitted any picks for this week yet.")
     else:
@@ -211,6 +228,10 @@ def main_app():
             index=get_current_week() - 1,
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
+        
+        # --- NEW: Fetch betting lines ---
+        with st.spinner(f"Fetching betting lines for Week {current_week}..."):
+            betting_lines = fetch_betting_lines(current_year, current_week)
 
         # Always query the database for the true state of the picks
         conn = st.connection("db", type="sql")
@@ -229,20 +250,35 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
-        # Pre-populate the DataFrame based on the database query
+        # --- MODIFIED: Add "Line" to the DataFrame ---
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
             is_selected = team in existing_picks
-            picks_data.append({"Select": is_selected, "My Team": team, "Opponent": opponent})
+            
+            # Get and format the betting line for the team
+            line = betting_lines.get(team)
+            if line is not None:
+                # Add a "+" sign for positive (underdog) spreads
+                formatted_line = f"+{line}" if line > 0 else str(line)
+            else:
+                formatted_line = "N/A"
+            
+            picks_data.append({
+                "Select": is_selected, 
+                "My Team": team, 
+                "Opponent": opponent,
+                "Line": formatted_line
+            })
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
         if not picks_df.empty:
+            # --- MODIFIED: Disable the "Line" column from editing ---
             edited_df = st.data_editor(
                 picks_df,
                 column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                disabled=["My Team", "Opponent"],
+                disabled=["My Team", "Opponent", "Line"],
                 hide_index=True,
                 use_container_width=True,
                 key=f"picks_editor_{current_week}"
@@ -259,7 +295,6 @@ def main_app():
                             s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                         s.commit()
                     st.success("Picks submitted successfully!")
-                    # THIS IS THE FIX: Clear both data and resource caches
                     st.cache_data.clear()
                     st.cache_resource.clear()
                     st.rerun()
@@ -270,21 +305,18 @@ def main_app():
                         s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                         s.commit()
                     st.success("Picks cleared successfully!")
-                    # THIS IS THE FIX: Clear both data and resource caches
                     st.cache_data.clear()
                     st.cache_resource.clear()
                     st.rerun()
 
             st.divider()
-            # This view will now be accurate after submission/clearing
             display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
         max_week = get_current_week()
-        updatable_weeks = range(1, max_week + 1) # Allow updating the current week
-
+        updatable_weeks = range(1, max_week + 1)
         if not updatable_weeks:
             st.info("No weeks are available to update yet.")
         else:
@@ -295,10 +327,8 @@ def main_app():
             )
             if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                 update_scoreboard(week_to_update, datetime.datetime.now().year)
-
         st.divider()
         display_scoreboard()
-
 
 # --- App Initialization and State Management ---
 
