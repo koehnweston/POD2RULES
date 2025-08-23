@@ -213,9 +213,9 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
-        # Initialize a version key in session_state to force the editor to refresh
-        if f"editor_version_{current_week}" not in st.session_state:
-            st.session_state[f"editor_version_{current_week}"] = 0
+        # Initialize a single, simple version counter for the editor's key
+        if 'editor_version' not in st.session_state:
+            st.session_state.editor_version = 0
 
         # Always query the database for the true state of the picks
         conn = st.connection("db", type="sql", ttl=0)
@@ -234,7 +234,7 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
-        # Pre-populate the DataFrame based on the database query
+        # The editor's DataFrame is always built fresh from the database query
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
@@ -243,44 +243,41 @@ def main_app():
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
-        if not picks_df.empty:
-            edited_df = st.data_editor(
-                picks_df,
-                column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                disabled=["My Team", "Opponent"],
-                hide_index=True,
-                use_container_width=True,
-                # CRITICAL: The key is now unique for each week AND each action
-                key=f"picks_editor_{current_week}_{st.session_state[f'editor_version_{current_week}']}"
-            )
+        # The data editor is now the single source of truth for viewing your picks on this page
+        edited_df = st.data_editor(
+            picks_df,
+            column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
+            disabled=["My Team", "Opponent"],
+            hide_index=True,
+            use_container_width=True,
+            # CRITICAL: The key changes after every action, forcing a reset
+            key=f"picks_editor_{current_week}_{st.session_state.editor_version}"
+        )
 
-            selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
+        selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
-                    with st.connection("db", type="sql").session as s:
-                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                        for team in selected_teams:
-                            s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
-                        s.commit()
-                    st.success("Picks submitted successfully!")
-                    # Increment the key version to force a widget reset on rerun
-                    st.session_state[f"editor_version_{current_week}"] += 1
-                    st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
+                with st.connection("db", type="sql").session as s:
+                    s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                    for team in selected_teams:
+                        s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
+                    s.commit()
+                st.success("Picks submitted successfully!")
+                # Increment the key version to force a widget reset
+                st.session_state.editor_version += 1
+                st.rerun()
 
-            with col2:
-                if st.button("❌ Clear Picks", use_container_width=True):
-                    with st.connection("db", type="sql").session as s:
-                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                        s.commit()
-                    st.success("Picks cleared successfully!")
-                    # Increment the key version to force a widget reset on rerun
-                    st.session_state[f"editor_version_{current_week}"] += 1
-                    st.rerun()
-
-            st.divider()
-            display_user_picks(st.session_state.username, current_week)
+        with col2:
+            if st.button("❌ Clear Picks", use_container_width=True):
+                with st.connection("db", type="sql").session as s:
+                    s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                    s.commit()
+                st.success("Picks cleared successfully!")
+                # Increment the key version to force a widget reset
+                st.session_state.editor_version += 1
+                st.rerun()
 
 
     # --- TAB 2: SCOREBOARD ---
@@ -319,6 +316,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
