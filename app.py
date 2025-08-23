@@ -58,8 +58,17 @@ def get_current_week():
 # --- API & Data Fetching Functions ---
 
 def fetch_api_data(endpoint, params):
-    
-    
+    """Generic function to fetch data from the collegefootballdata API."""
+    try:
+        # Accessing the key directly at the top level
+        api_key = st.secrets.api_key
+        if not api_key:
+            st.error("API key is present but has no value. Please check your Streamlit app settings.")
+            return None, "API key is empty."
+    except AttributeError:
+        # This error happens if st.secrets.api_key doesn't exist at all
+        st.error("API key not found. Please add it to your Streamlit app settings.")
+        return None, "API key not configured."
 
     auth_header_value = f"Bearer {api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
@@ -67,8 +76,6 @@ def fetch_api_data(endpoint, params):
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
-        # On success, clear the debug messages
-        st.empty() 
         return response.json(), None
     except requests.exceptions.HTTPError as e:
         return None, f"API request failed: {e.response.status_code} - {e.response.text}."
@@ -344,6 +351,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
