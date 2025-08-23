@@ -49,7 +49,7 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 def get_current_week():
     """Calculates the current week of the season."""
     # Set to a date in 2025 for consistent testing
-    season_start_date = datetime.date(2025, 8, 18) 
+    season_start_date = datetime.date(2025, 8, 18)
     today = datetime.date.today()
     # If today is before the season start, default to week 1
     if today < season_start_date:
@@ -68,7 +68,7 @@ def fetch_api_data(endpoint, params):
 
     auth_header_value = f"Bearer {st.secrets.api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
-    
+
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
@@ -102,14 +102,14 @@ def fetch_game_results(year, week):
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the database."""
     conn = st.connection("db", type="sql")
-    
+
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
         if not winning_teams:
             return
 
         all_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {week};")
-        
+
         if all_picks_df.empty:
             st.warning(f"No user picks found in the database for Week {week}.")
             return
@@ -119,22 +119,19 @@ def update_scoreboard(week, year):
             user_picks = all_picks_df[all_picks_df["user"] == user]["team"].tolist()
             wins = sum(1 for team in user_picks if team in winning_teams)
             scores[user] = wins
-        
-        # Use a session to execute delete and inserts in a transaction
+
         with conn.session as s:
-            # Delete old scores for the week to prevent duplicates
             s.execute(text(f"DELETE FROM scoreboard WHERE week = {week};"))
-            
-            # Insert new scores
             for user, wins in scores.items():
                 s.execute(
                     text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'),
                     params=dict(user=user, week=week, wins=wins)
                 )
             s.commit()
-            
+
         st.success(f"Scoreboard successfully updated for Week {week}!")
         st.cache_data.clear()
+        st.cache_resource.clear() # Clear connection cache after scoreboard update too
 
 def display_scoreboard():
     """Loads scoreboard data from the database and displays it."""
@@ -146,13 +143,13 @@ def display_scoreboard():
         if df.empty:
             st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
             return
-        
+
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
-        
+
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         pivot_df['Total Wins'] = pivot_df.sum(axis=1)
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
-        
+
         st.dataframe(pivot_df, use_container_width=True)
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -162,15 +159,12 @@ def display_scoreboard():
 def display_user_picks(user, week):
     """Fetches and displays a user's picks for a given week from the database."""
     st.subheader(f"Your Submitted Picks for Week {week}")
-    
-    # Use ttl=0 to disable caching for this specific, time-sensitive query
-    conn = st.connection("db", type="sql", ttl=0) 
-    
+    conn = st.connection("db", type="sql", ttl=0)
     picks_df = conn.query(
         'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
         params={"user": user, "week": week}
     )
-    
+
     if picks_df.empty:
         st.info("You have not submitted any picks for this week yet.")
     else:
@@ -206,23 +200,17 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    # Add a dedicated "View My Picks" tab for clarity
-    tab1, tab2, tab3 = st.tabs(["✍️ Make Picks", "👀 View My Picks", "🏆 Scoreboard"])
+    # Simplified back to two tabs for a cleaner user experience
+    tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
 
-    # --- TAB 1: MAKE PICKS ---
     with tab1:
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
             options=[f"Week {i}" for i in range(1, 16)],
             index=get_current_week() - 1,
-            key="week_selector_tab1"
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
-
-        # Initialize a version counter to force the editor to reset
-        if 'editor_version' not in st.session_state:
-            st.session_state.editor_version = 0
 
         # Always query the database for the true state of the picks
         conn = st.connection("db", type="sql", ttl=0)
@@ -241,7 +229,7 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
-        # The editor's DataFrame is always built fresh from the database query
+        # Pre-populate the DataFrame based on the database query
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
@@ -250,63 +238,51 @@ def main_app():
         picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
-        edited_df = st.data_editor(
-            picks_df,
-            column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-            disabled=["My Team", "Opponent"],
-            hide_index=True,
-            use_container_width=True,
-            # CRITICAL: The key changes after every action, forcing a reset
-            key=f"picks_editor_{current_week}_{st.session_state.editor_version}"
-        )
+        if not picks_df.empty:
+            edited_df = st.data_editor(
+                picks_df,
+                column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
+                disabled=["My Team", "Opponent"],
+                hide_index=True,
+                use_container_width=True,
+                key=f"picks_editor_{current_week}" # A simple key is sufficient
+            )
 
-        selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
+            selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
-                with st.connection("db", type="sql").session as s:
-                    s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                    for team in selected_teams:
-                        s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
-                    s.commit()
-                st.success("Picks submitted! Check the 'View My Picks' tab to confirm.")
-                # Increment the key version to force a widget reset
-                st.session_state.editor_version += 1
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
+                    with st.connection("db", type="sql").session as s:
+                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                        for team in selected_teams:
+                            s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
+                        s.commit()
+                    st.success("Picks submitted successfully!")
+                    # CRITICAL FIX: Clear the entire connection resource cache
+                    st.cache_resource.clear()
+                    st.rerun()
 
-        with col2:
-            if st.button("❌ Clear Picks", use_container_width=True):
-                with st.connection("db", type="sql").session as s:
-                    s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                    s.commit()
-                st.success("Picks cleared successfully!")
-                # Increment the key version to force a widget reset
-                st.session_state.editor_version += 1
-                st.rerun()
+            with col2:
+                if st.button("❌ Clear Picks", use_container_width=True):
+                    with st.connection("db", type="sql").session as s:
+                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                        s.commit()
+                    st.success("Picks cleared successfully!")
+                    # CRITICAL FIX: Clear the entire connection resource cache
+                    st.cache_resource.clear()
+                    st.rerun()
 
-    # --- TAB 2: VIEW MY PICKS ---
+            st.divider()
+            # The confirmation view is now back on the same page and will be accurate
+            display_user_picks(st.session_state.username, current_week)
+
     with tab2:
-        st.title("Your Submitted Picks")
-        view_week = int(st.selectbox(
-            "Select Week to View",
-            options=[f"Week {i}" for i in range(1, 16)],
-            index=get_current_week() - 1,
-            key="week_selector_tab2"
-        ).split(" ")[1])
-        st.divider()
-        # This function provides a clean, read-only view of the database
-        display_user_picks(st.session_state.username, view_week)
-
-    # --- TAB 3: SCOREBOARD ---
-    with tab3:
         st.title("League Scoreboard")
         st.subheader("Update Weekly Scores")
-        st.markdown("Select a completed week and click the button to update the standings.")
-        
         max_week = get_current_week()
         updatable_weeks = range(1, max_week)
-        
+
         if not updatable_weeks:
             st.info("No past weeks are available to update yet.")
         else:
@@ -315,10 +291,9 @@ def main_app():
                 options=updatable_weeks,
                 index=len(updatable_weeks) - 1,
             )
-            
             if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                 update_scoreboard(week_to_update, datetime.datetime.now().year)
-        
+
         st.divider()
         display_scoreboard()
 
