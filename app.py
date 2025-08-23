@@ -58,10 +58,7 @@ def get_current_week():
 # --- API & Data Fetching Functions ---
 
 def fetch_api_data(endpoint, params):
-    """Generic function to fetch data from the collegefootballdata API."""
     
-    
-
     
 
     auth_header_value = f"Bearer {api_key}"
@@ -347,6 +344,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
