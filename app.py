@@ -211,8 +211,11 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
 
-        # --- This logic is now simplified and correct ---
-        # It will always query the database for the single source of truth.
+        # --- NEW: Initialize a version key to force the editor to reset ---
+        if 'editor_version' not in st.session_state:
+            st.session_state.editor_version = 0
+
+        # --- Always query the database for the true state of the picks ---
         conn = st.connection("db", type="sql", ttl=0)
         existing_picks_df = conn.query(
             'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
@@ -220,9 +223,8 @@ def main_app():
         )
         existing_picks = set(existing_picks_df['team'])
 
-        # Display the informational message if picks already exist for the week.
         if not existing_picks_df.empty:
-            st.info("💡 You have already submitted picks for this week. To change them, first clear your old picks.", icon="ℹ️")
+            st.info("💡 To change your picks, make new selections and click 'Submit', or clear them first.", icon="ℹ️")
 
         # Load schedule data
         try:
@@ -233,7 +235,7 @@ def main_app():
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             matchups = {}
 
-        # Pre-populate the DataFrame based on existing picks
+        # Pre-populate the DataFrame based on the database query
         picks_data = []
         for team in st.session_state.my_teams:
             opponent = matchups.get(team, "BYE WEEK")
@@ -251,7 +253,8 @@ def main_app():
                 disabled=["My Team", "Opponent"],
                 hide_index=True,
                 use_container_width=True,
-                key=f"picks_editor_{current_week}" # A simple key is now sufficient
+                # --- CRITICAL CHANGE: Use a versioned key ---
+                key=f"picks_editor_{current_week}_{st.session_state.editor_version}"
             )
             
             selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
@@ -262,20 +265,13 @@ def main_app():
             if num_picks != 6 and num_picks > 0:
                  st.warning(f"⚠️ The standard is 6 picks, but you have selected **{num_picks}**.")
 
-            # --- NEW: Add a "Clear Picks" button ---
             col1, col2 = st.columns(2)
             
             with col1:
-                if st.button(
-                    "✅ Submit My Picks for this Week",
-                    use_container_width=True,
-                    type="primary"
-                ):
+                if st.button("✅ Submit My Picks", use_container_width=True, type="primary"):
                     conn = st.connection("db", type="sql", ttl=0)
                     user = st.session_state.username
-                    
                     with conn.session as s:
-                        # Use DELETE/INSERT to handle both new submissions and updates
                         s.execute(
                             text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
                             params=dict(user=user, week=current_week)
@@ -287,25 +283,25 @@ def main_app():
                             )
                         s.commit()
                     
-                    st.success(f"Successfully submitted {num_picks} picks for Week {current_week}!")
+                    st.success(f"Successfully submitted {num_picks} picks!")
+                    # --- CRITICAL CHANGE: Increment version to force reset ---
+                    st.session_state.editor_version += 1
                     st.rerun()
 
             with col2:
-                if st.button("❌ Clear Picks for this Week", use_container_width=True):
-                    # Only clear if there's something to clear
-                    if not existing_picks_df.empty:
-                        conn = st.connection("db", type="sql", ttl=0)
-                        user = st.session_state.username
-                        with conn.session as s:
-                            s.execute(
-                                text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
-                                params=dict(user=user, week=current_week)
-                            )
-                            s.commit()
-                        st.success("Picks cleared! You can now make new selections.")
-                        st.rerun()
-                    else:
-                        st.info("There are no picks to clear.")
+                if st.button("❌ Clear All Picks", use_container_width=True):
+                    conn = st.connection("db", type="sql", ttl=0)
+                    user = st.session_state.username
+                    with conn.session as s:
+                        s.execute(
+                            text('DELETE FROM picks WHERE "user" = :user AND week = :week;'),
+                            params=dict(user=user, week=current_week)
+                        )
+                        s.commit()
+                    st.success("Picks cleared!")
+                    # --- CRITICAL CHANGE: Increment version to force reset ---
+                    st.session_state.editor_version += 1
+                    st.rerun()
 
             st.divider()
             
@@ -348,6 +344,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
