@@ -47,7 +47,7 @@ SMTP_PORT = 465
 # --- Helper Function (Copied from your app) ---
 def get_current_week():
     """Calculates the current week of the season."""
-    season_start_date = datetime.date(2025, 8, 18)
+    season_start_date = datetime.date(2025, 8, 28)
     today = datetime.date.today()
     if today < season_start_date:
         return 1
@@ -114,4 +114,5 @@ def check_and_send_reminders():
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
+
     check_and_send_reminders()
