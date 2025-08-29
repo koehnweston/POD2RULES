@@ -236,7 +236,7 @@ def main_app():
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
         
-        # --- NEW: Fetch betting lines ---
+        # --- Fetch betting lines ---
         with st.spinner(f"Fetching betting lines for Week {current_week}..."):
             betting_lines = fetch_betting_lines(current_year, current_week)
 
@@ -248,21 +248,33 @@ def main_app():
         )
         existing_picks = set(existing_picks_df['team'])
 
-        # Load schedule data
+        # --- MODIFIED: Load schedule data and create a detailed game lookup ---
+        game_info = {}
         try:
             schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
-            matchups = {row['homeTeam']: row['awayTeam'] for _, row in schedule_df.iterrows()}
-            matchups.update({row['awayTeam']: row['homeTeam'] for _, row in schedule_df.iterrows()})
+            for _, row in schedule_df.iterrows():
+                home_team = row['homeTeam']
+                away_team = row['awayTeam']
+                # Store details for both teams
+                game_info[home_team] = {'opponent': away_team, 'location': 'Home'}
+                game_info[away_team] = {'opponent': home_team, 'location': 'Away'}
         except FileNotFoundError:
             st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
-            matchups = {}
 
-        # --- MODIFIED: Add "Line" to the DataFrame ---
+        # --- MODIFIED: Add "Location" and "Line" to the DataFrame ---
         picks_data = []
         for team in st.session_state.my_teams:
-            opponent = matchups.get(team, "BYE WEEK")
             is_selected = team in existing_picks
             
+            # Get opponent and location
+            match_details = game_info.get(team)
+            if match_details:
+                opponent = match_details['opponent']
+                location = match_details['location']
+            else:
+                opponent = "BYE WEEK"
+                location = "N/A"
+
             # Get and format the betting line for the team
             line = betting_lines.get(team)
             if line is not None:
@@ -274,18 +286,24 @@ def main_app():
             picks_data.append({
                 "Select": is_selected, 
                 "My Team": team, 
+                "Location": location, # New column for Home/Away
                 "Opponent": opponent,
                 "Line": formatted_line
             })
-        picks_df = pd.DataFrame(picks_data)
+        
+        # Define column order explicitly
+        if picks_data:
+            picks_df = pd.DataFrame(picks_data)[['Select', 'My Team', 'Location', 'Opponent', 'Line']]
+        else:
+            picks_df = pd.DataFrame(picks_data)
 
         st.subheader(f"Your Matchups for Week {current_week}")
         if not picks_df.empty:
-            # --- MODIFIED: Disable the "Line" column from editing ---
+            # --- MODIFIED: Disable the new "Location" column from editing ---
             edited_df = st.data_editor(
                 picks_df,
                 column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                disabled=["My Team", "Opponent", "Line"],
+                disabled=["My Team", "Location", "Opponent", "Line"], # Added "Location"
                 hide_index=True,
                 use_container_width=True,
                 key=f"picks_editor_{current_week}"
@@ -351,9 +369,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
-
-
-
-
-
