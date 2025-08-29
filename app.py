@@ -5,6 +5,7 @@ import datetime
 import re
 import os
 import pytz # Added for timezone handling
+import time # Added for auto-refresh
 from collections import defaultdict
 from sqlalchemy import text
 
@@ -56,37 +57,43 @@ def get_current_week():
     current_week = (days_since_start // 7) + 1
     return min(current_week, 15)
 
-# --- NEW: Function to check if picks are locked for the week ---
 def are_picks_locked(week, year):
-    """
-    Checks if the current time is past the pick deadline for a given week.
-    The deadline is 10:59 AM Central Time on the Saturday of that week.
-    """
+    """Checks if the current time is past the 10:59 AM pick deadline."""
     try:
         central_tz = pytz.timezone("America/Chicago")
-
-        # The season starts on a Wednesday. Find the first Saturday.
-        season_start_date = datetime.date(year, 8, 27) 
-        # weekday() -> Monday is 0 and Sunday is 6. Saturday is 5.
+        season_start_date = datetime.date(year, 8, 27)
         days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
         first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
-        
-        # Calculate the target Saturday for the given week
         target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
-
-        # Create the deadline datetime object (timezone-aware)
         lock_time = datetime.time(10, 59)
         lock_datetime_naive = datetime.datetime.combine(target_saturday, lock_time)
         lock_datetime_aware = central_tz.localize(lock_datetime_naive)
-
-        # Get the current time (timezone-aware)
         now_aware = datetime.datetime.now(central_tz)
-
-        # Return True if the current time is past the deadline
         return now_aware >= lock_datetime_aware
     except Exception as e:
         st.error(f"Error checking lock time: {e}")
-        return False # Fail safe: if time check fails, don't lock picks
+        return False
+
+# --- NEW: Function to check if live scoring is active ---
+def is_live_scoring_active(week, year):
+    """
+    Checks if the current time is past the live scoring start time.
+    The start time is 11:00 AM Central Time on the Saturday of that week.
+    """
+    try:
+        central_tz = pytz.timezone("America/Chicago")
+        season_start_date = datetime.date(year, 8, 27)
+        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
+        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
+        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
+        start_time = datetime.time(11, 0)
+        start_datetime_naive = datetime.datetime.combine(target_saturday, start_time)
+        start_datetime_aware = central_tz.localize(start_datetime_naive)
+        now_aware = datetime.datetime.now(central_tz)
+        return now_aware >= start_datetime_aware
+    except Exception as e:
+        st.error(f"Error checking live scoring time: {e}")
+        return False
 
 # --- API & Data Fetching Functions ---
 
@@ -100,10 +107,8 @@ def fetch_api_data(endpoint, params):
     except AttributeError:
         st.error("API key not found. Please add it to your Streamlit app settings.")
         return None, "API key not configured."
-
     auth_header_value = f"Bearer {api_key}"
     headers = {'accept': 'application/json', 'Authorization': auth_header_value}
-
     try:
         response = requests.get(f"https://api.collegefootballdata.com/{endpoint}", headers=headers, params=params)
         response.raise_for_status()
@@ -136,26 +141,39 @@ def fetch_game_results(year, week):
 def fetch_betting_lines(year, week):
     """Fetches betting lines for a given week from the API."""
     lines_data, error = fetch_api_data("lines", {'year': year, 'week': week, 'seasonType': 'regular'})
-    if error:
-        return {}
-    if not lines_data:
+    if error or not lines_data:
         return {}
     betting_lines = {}
     for game in lines_data:
         line_to_use = None
         if game.get('lines'):
             consensus_lines = [line for line in game['lines'] if line.get('provider') == 'consensus']
-            if consensus_lines:
-                line_to_use = consensus_lines[0]
-            else:
-                line_to_use = game['lines'][0]
+            line_to_use = consensus_lines[0] if consensus_lines else game['lines'][0]
         if line_to_use and line_to_use.get('spread'):
-            home_team = game['homeTeam']
-            away_team = game['awayTeam']
             spread = float(line_to_use['spread'])
-            betting_lines[home_team] = spread
-            betting_lines[away_team] = -spread
+            betting_lines[game['homeTeam']] = spread
+            betting_lines[game['awayTeam']] = -spread
     return betting_lines
+
+# --- NEW: Function to fetch live scores with a short cache time ---
+@st.cache_data(ttl=60)
+def fetch_live_scores(year, week):
+    """Fetches live score data for all games in a week."""
+    games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
+    if error or not games_data:
+        return {}
+    
+    live_scores = {}
+    for game in games_data:
+        home_team = game.get('home_team')
+        away_team = game.get('away_team')
+        home_points = game.get('home_points')
+        away_points = game.get('away_points')
+
+        if all([home_team, away_team, home_points is not None, away_points is not None]):
+            live_scores[home_team] = {'score': home_points, 'opponent_score': away_points}
+            live_scores[away_team] = {'score': away_points, 'opponent_score': home_points}
+    return live_scores
 
 # --- Scoreboard Logic (with SQL Database) ---
 
@@ -164,17 +182,12 @@ def update_scoreboard(week, year):
     conn = st.connection("db", type="sql")
     with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
-        if not winning_teams:
-            return
+        if not winning_teams: return
         all_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {week};")
         if all_picks_df.empty:
-            st.warning(f"No user picks found in the database for Week {week}.")
+            st.warning(f"No user picks found for Week {week}.")
             return
-        scores = {}
-        for user in all_picks_df["user"].unique():
-            user_picks = all_picks_df[all_picks_df["user"] == user]["team"].tolist()
-            wins = sum(1 for team in user_picks if team in winning_teams)
-            scores[user] = wins
+        scores = {user: sum(1 for team in all_picks_df[all_picks_df["user"] == user]["team"] if team in winning_teams) for user in all_picks_df["user"].unique()}
         with conn.session as s:
             s.execute(text(f"DELETE FROM scoreboard WHERE week = {week};"))
             for user, wins in scores.items():
@@ -194,7 +207,7 @@ def display_scoreboard():
         conn = st.connection("db", type="sql")
         df = conn.query("SELECT * FROM scoreboard;")
         if df.empty:
-            st.info("Scoreboard is empty. Submit picks and update a week's scores to begin.")
+            st.info("Scoreboard is empty. Submit picks and update scores to begin.")
             return
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
@@ -249,7 +262,8 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
+    # Define tabs, now including the Live Games tab
+    tab1, tab2, tab3 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard", "🔴 Live Games"])
 
     with tab1:
         st.title("Weekly Picks Selection")
@@ -257,10 +271,9 @@ def main_app():
             "Select Week",
             options=[f"Week {i}" for i in range(1, 16)],
             index=get_current_week() - 1,
+            key="week_selector_tab1"
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
-
-        # --- MODIFIED: Check if picks are locked and render UI accordingly ---
         picks_are_locked = are_picks_locked(current_week, current_year)
 
         if picks_are_locked:
@@ -268,62 +281,35 @@ def main_app():
             st.divider()
             display_user_picks(st.session_state.username, current_week)
         else:
-            # --- This is the original UI for when picks are NOT locked ---
             with st.spinner(f"Fetching betting lines for Week {current_week}..."):
                 betting_lines = fetch_betting_lines(current_year, current_week)
-
             conn = st.connection("db", type="sql")
-            existing_picks_df = conn.query(
-                'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
-                params={"user": st.session_state.username, "week": current_week}
-            )
+            existing_picks_df = conn.query('SELECT team FROM picks WHERE "user" = :user AND week = :week;', params={"user": st.session_state.username, "week": current_week})
             existing_picks = set(existing_picks_df['team'])
-            
             game_info = {}
             try:
                 schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
                 for _, row in schedule_df.iterrows():
-                    home_team = row['homeTeam']
-                    away_team = row['awayTeam']
-                    game_info[home_team] = {'opponent': away_team, 'location': 'Home'}
-                    game_info[away_team] = {'opponent': home_team, 'location': 'Away'}
+                    game_info[row['homeTeam']] = {'opponent': row['awayTeam'], 'location': 'Home'}
+                    game_info[row['awayTeam']] = {'opponent': row['homeTeam'], 'location': 'Away'}
             except FileNotFoundError:
                 st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
             
             picks_data = []
             for team in st.session_state.my_teams:
-                is_selected = team in existing_picks
-                match_details = game_info.get(team)
-                if match_details:
-                    opponent = match_details['opponent']
-                    location = match_details['location']
-                else:
-                    opponent = "BYE WEEK"
-                    location = "N/A"
+                match_details = game_info.get(team, {})
                 line = betting_lines.get(team)
-                if line is not None:
-                    formatted_line = f"+{line}" if line > 0 else str(line)
-                else:
-                    formatted_line = "N/A"
                 picks_data.append({
-                    "Select": is_selected, "My Team": team, "Location": location,
-                    "Opponent": opponent, "Line": formatted_line
+                    "Select": team in existing_picks, "My Team": team, "Location": match_details.get('location', 'N/A'),
+                    "Opponent": match_details.get('opponent', 'BYE WEEK'), "Line": f"+{line}" if line and line > 0 else str(line) if line is not None else "N/A"
                 })
-            
-            if picks_data:
-                picks_df = pd.DataFrame(picks_data)[['Select', 'My Team', 'Location', 'Opponent', 'Line']]
-            else:
-                picks_df = pd.DataFrame(picks_data)
+            picks_df = pd.DataFrame(picks_data)[['Select', 'My Team', 'Location', 'Opponent', 'Line']] if picks_data else pd.DataFrame(picks_data)
 
             st.subheader(f"Your Matchups for Week {current_week}")
             if not picks_df.empty:
                 edited_df = st.data_editor(
-                    picks_df,
-                    column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                    disabled=["My Team", "Location", "Opponent", "Line"],
-                    hide_index=True,
-                    use_container_width=True,
-                    key=f"picks_editor_{current_week}"
+                    picks_df, column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
+                    disabled=["My Team", "Location", "Opponent", "Line"], hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
                 )
                 selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
                 col1, col2 = st.columns(2)
@@ -335,18 +321,14 @@ def main_app():
                                 s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                             s.commit()
                         st.success("Picks submitted successfully!")
-                        st.cache_data.clear()
-                        st.cache_resource.clear()
-                        st.rerun()
+                        st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
                 with col2:
                     if st.button("❌ Clear Picks", use_container_width=True):
                         with st.connection("db", type="sql").session as s:
                             s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                             s.commit()
                         st.success("Picks cleared successfully!")
-                        st.cache_data.clear()
-                        st.cache_resource.clear()
-                        st.rerun()
+                        st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
                 st.divider()
                 display_user_picks(st.session_state.username, current_week)
 
@@ -358,15 +340,64 @@ def main_app():
         if not updatable_weeks:
             st.info("No weeks are available to update yet.")
         else:
-            week_to_update = st.selectbox(
-                "Select week to update scores",
-                options=updatable_weeks,
-                index=len(updatable_weeks) - 1,
-            )
+            week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
             if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                 update_scoreboard(week_to_update, datetime.datetime.now().year)
         st.divider()
         display_scoreboard()
+
+    # --- NEW: Live Games Tab ---
+    with tab3:
+        st.title("🔴 Live Games")
+        current_week = get_current_week()
+        current_year = datetime.datetime.now().year
+        
+        st.subheader(f"Live Status for Week {current_week}")
+
+        if not is_live_scoring_active(current_week, current_year):
+            st.info("Live scoring for the current week will begin at 11:00 AM Central Time on Saturday.")
+        else:
+            with st.spinner("Fetching live scores..."):
+                live_scores = fetch_live_scores(current_year, current_week)
+                conn = st.connection("db", type="sql")
+                all_picks_df = conn.query(f'SELECT "user", team FROM picks WHERE week = {current_week};')
+                
+                game_info = {}
+                try:
+                    schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
+                    for _, row in schedule_df.iterrows():
+                        game_info[row['homeTeam']] = {'opponent': row['awayTeam']}
+                        game_info[row['awayTeam']] = {'opponent': row['homeTeam']}
+                except FileNotFoundError:
+                    st.warning(f"Schedule file for week {current_week} not found. Opponent data may be missing.")
+
+                if all_picks_df.empty:
+                    st.info("No picks have been submitted for this week yet.")
+                else:
+                    leaderboard_data = []
+                    for _, row in all_picks_df.iterrows():
+                        team = row['team']
+                        score_info = live_scores.get(team)
+                        if score_info:
+                            score_str = f"{score_info['score']} - {score_info['opponent_score']}"
+                            if score_info['score'] > score_info['opponent_score']: status = "Winning ✅"
+                            elif score_info['score'] < score_info['opponent_score']: status = "Losing ❌"
+                            else: status = "Tied 🤝"
+                        else:
+                            score_str = "Pending / Final"; status = "N/A"
+                        
+                        leaderboard_data.append({
+                            "User": row['user'], "Picked Team": team, 
+                            "Opponent": game_info.get(team, {}).get('opponent', 'N/A'),
+                            "Live Score": score_str, "Status": status
+                        })
+                    
+                    leaderboard_df = pd.DataFrame(leaderboard_data)
+                    st.dataframe(leaderboard_df.sort_values(by="User"), use_container_width=True, hide_index=True)
+                    
+                    st.caption("Leaderboard auto-refreshes every 60 seconds.")
+                    time.sleep(60)
+                    st.rerun()
 
 # --- App Initialization and State Management ---
 
