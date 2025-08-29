@@ -4,6 +4,7 @@ import requests
 import datetime
 import re
 import os
+import pytz # Added for timezone handling
 from collections import defaultdict
 from sqlalchemy import text
 
@@ -55,18 +56,48 @@ def get_current_week():
     current_week = (days_since_start // 7) + 1
     return min(current_week, 15)
 
+# --- NEW: Function to check if picks are locked for the week ---
+def are_picks_locked(week, year):
+    """
+    Checks if the current time is past the pick deadline for a given week.
+    The deadline is 10:59 AM Central Time on the Saturday of that week.
+    """
+    try:
+        central_tz = pytz.timezone("America/Chicago")
+
+        # The season starts on a Wednesday. Find the first Saturday.
+        season_start_date = datetime.date(year, 8, 27) 
+        # weekday() -> Monday is 0 and Sunday is 6. Saturday is 5.
+        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
+        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
+        
+        # Calculate the target Saturday for the given week
+        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
+
+        # Create the deadline datetime object (timezone-aware)
+        lock_time = datetime.time(10, 59)
+        lock_datetime_naive = datetime.datetime.combine(target_saturday, lock_time)
+        lock_datetime_aware = central_tz.localize(lock_datetime_naive)
+
+        # Get the current time (timezone-aware)
+        now_aware = datetime.datetime.now(central_tz)
+
+        # Return True if the current time is past the deadline
+        return now_aware >= lock_datetime_aware
+    except Exception as e:
+        st.error(f"Error checking lock time: {e}")
+        return False # Fail safe: if time check fails, don't lock picks
+
 # --- API & Data Fetching Functions ---
 
 def fetch_api_data(endpoint, params):
     """Generic function to fetch data from the collegefootballdata API."""
     try:
-        # Accessing the key directly at the top level
         api_key = st.secrets.api_key
         if not api_key:
             st.error("API key is present but has no value. Please check your Streamlit app settings.")
             return None, "API key is empty."
     except AttributeError:
-        # This error happens if st.secrets.api_key doesn't exist at all
         st.error("API key not found. Please add it to your Streamlit app settings.")
         return None, "API key not configured."
 
@@ -106,31 +137,24 @@ def fetch_betting_lines(year, week):
     """Fetches betting lines for a given week from the API."""
     lines_data, error = fetch_api_data("lines", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error:
-        # Don't show a blocking error, just return empty if lines aren't ready
         return {}
     if not lines_data:
         return {}
-
     betting_lines = {}
     for game in lines_data:
-        # Prefer the consensus line, but fall back to the first available line
         line_to_use = None
         if game.get('lines'):
             consensus_lines = [line for line in game['lines'] if line.get('provider') == 'consensus']
             if consensus_lines:
                 line_to_use = consensus_lines[0]
             else:
-                line_to_use = game['lines'][0] # Fallback to the first provider
-        
+                line_to_use = game['lines'][0]
         if line_to_use and line_to_use.get('spread'):
             home_team = game['homeTeam']
             away_team = game['awayTeam']
-            # The spread is from the home team's perspective (e.g., -7.0 means home team is favored by 7)
             spread = float(line_to_use['spread'])
-            
             betting_lines[home_team] = spread
-            betting_lines[away_team] = -spread # The away team has the opposite spread
-
+            betting_lines[away_team] = -spread
     return betting_lines
 
 # --- Scoreboard Logic (with SQL Database) ---
@@ -235,107 +259,96 @@ def main_app():
             index=get_current_week() - 1,
         ).split(" ")[1])
         current_year = datetime.datetime.now().year
-        
-        # --- Fetch betting lines ---
-        with st.spinner(f"Fetching betting lines for Week {current_week}..."):
-            betting_lines = fetch_betting_lines(current_year, current_week)
 
-        # Always query the database for the true state of the picks
-        conn = st.connection("db", type="sql")
-        existing_picks_df = conn.query(
-            'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
-            params={"user": st.session_state.username, "week": current_week}
-        )
-        existing_picks = set(existing_picks_df['team'])
+        # --- MODIFIED: Check if picks are locked and render UI accordingly ---
+        picks_are_locked = are_picks_locked(current_week, current_year)
 
-        # --- MODIFIED: Load schedule data and create a detailed game lookup ---
-        game_info = {}
-        try:
-            schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
-            for _, row in schedule_df.iterrows():
-                home_team = row['homeTeam']
-                away_team = row['awayTeam']
-                # Store details for both teams
-                game_info[home_team] = {'opponent': away_team, 'location': 'Home'}
-                game_info[away_team] = {'opponent': home_team, 'location': 'Away'}
-        except FileNotFoundError:
-            st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
-
-        # --- MODIFIED: Add "Location" and "Line" to the DataFrame ---
-        picks_data = []
-        for team in st.session_state.my_teams:
-            is_selected = team in existing_picks
-            
-            # Get opponent and location
-            match_details = game_info.get(team)
-            if match_details:
-                opponent = match_details['opponent']
-                location = match_details['location']
-            else:
-                opponent = "BYE WEEK"
-                location = "N/A"
-
-            # Get and format the betting line for the team
-            line = betting_lines.get(team)
-            if line is not None:
-                # Add a "+" sign for positive (underdog) spreads
-                formatted_line = f"+{line}" if line > 0 else str(line)
-            else:
-                formatted_line = "N/A"
-            
-            picks_data.append({
-                "Select": is_selected, 
-                "My Team": team, 
-                "Location": location, # New column for Home/Away
-                "Opponent": opponent,
-                "Line": formatted_line
-            })
-        
-        # Define column order explicitly
-        if picks_data:
-            picks_df = pd.DataFrame(picks_data)[['Select', 'My Team', 'Location', 'Opponent', 'Line']]
-        else:
-            picks_df = pd.DataFrame(picks_data)
-
-        st.subheader(f"Your Matchups for Week {current_week}")
-        if not picks_df.empty:
-            # --- MODIFIED: Disable the new "Location" column from editing ---
-            edited_df = st.data_editor(
-                picks_df,
-                column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                disabled=["My Team", "Location", "Opponent", "Line"], # Added "Location"
-                hide_index=True,
-                use_container_width=True,
-                key=f"picks_editor_{current_week}"
-            )
-
-            selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
-
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
-                    with st.connection("db", type="sql").session as s:
-                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                        for team in selected_teams:
-                            s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
-                        s.commit()
-                    st.success("Picks submitted successfully!")
-                    st.cache_data.clear()
-                    st.cache_resource.clear()
-                    st.rerun()
-
-            with col2:
-                if st.button("❌ Clear Picks", use_container_width=True):
-                    with st.connection("db", type="sql").session as s:
-                        s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
-                        s.commit()
-                    st.success("Picks cleared successfully!")
-                    st.cache_data.clear()
-                    st.cache_resource.clear()
-                    st.rerun()
-
+        if picks_are_locked:
+            st.warning(f"🔒 Picks for Week {current_week} are now locked.")
             st.divider()
             display_user_picks(st.session_state.username, current_week)
+        else:
+            # --- This is the original UI for when picks are NOT locked ---
+            with st.spinner(f"Fetching betting lines for Week {current_week}..."):
+                betting_lines = fetch_betting_lines(current_year, current_week)
+
+            conn = st.connection("db", type="sql")
+            existing_picks_df = conn.query(
+                'SELECT team FROM picks WHERE "user" = :user AND week = :week;',
+                params={"user": st.session_state.username, "week": current_week}
+            )
+            existing_picks = set(existing_picks_df['team'])
+            
+            game_info = {}
+            try:
+                schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
+                for _, row in schedule_df.iterrows():
+                    home_team = row['homeTeam']
+                    away_team = row['awayTeam']
+                    game_info[home_team] = {'opponent': away_team, 'location': 'Home'}
+                    game_info[away_team] = {'opponent': home_team, 'location': 'Away'}
+            except FileNotFoundError:
+                st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
+            
+            picks_data = []
+            for team in st.session_state.my_teams:
+                is_selected = team in existing_picks
+                match_details = game_info.get(team)
+                if match_details:
+                    opponent = match_details['opponent']
+                    location = match_details['location']
+                else:
+                    opponent = "BYE WEEK"
+                    location = "N/A"
+                line = betting_lines.get(team)
+                if line is not None:
+                    formatted_line = f"+{line}" if line > 0 else str(line)
+                else:
+                    formatted_line = "N/A"
+                picks_data.append({
+                    "Select": is_selected, "My Team": team, "Location": location,
+                    "Opponent": opponent, "Line": formatted_line
+                })
+            
+            if picks_data:
+                picks_df = pd.DataFrame(picks_data)[['Select', 'My Team', 'Location', 'Opponent', 'Line']]
+            else:
+                picks_df = pd.DataFrame(picks_data)
+
+            st.subheader(f"Your Matchups for Week {current_week}")
+            if not picks_df.empty:
+                edited_df = st.data_editor(
+                    picks_df,
+                    column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
+                    disabled=["My Team", "Location", "Opponent", "Line"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"picks_editor_{current_week}"
+                )
+                selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
+                        with st.connection("db", type="sql").session as s:
+                            s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                            for team in selected_teams:
+                                s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
+                            s.commit()
+                        st.success("Picks submitted successfully!")
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Clear Picks", use_container_width=True):
+                        with st.connection("db", type="sql").session as s:
+                            s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
+                            s.commit()
+                        st.success("Picks cleared successfully!")
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        st.rerun()
+                st.divider()
+                display_user_picks(st.session_state.username, current_week)
 
     with tab2:
         st.title("League Scoreboard")
@@ -369,4 +382,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
