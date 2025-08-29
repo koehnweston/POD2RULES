@@ -47,7 +47,7 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    season_start_date = datetime.date(2025, 8, 18)
+    season_start_date = datetime.date(2025, 8, 27)
     today = datetime.date.today()
     if today < season_start_date:
         return 1
@@ -369,3 +369,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
