@@ -187,13 +187,29 @@ def display_scoreboard():
         if df.empty:
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
+        
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
-        pivot_df['Total Wins'] = pivot_df.sum(axis=1)
+        
+        # --- FIXED: Explicitly sort the week columns to handle Week 0 correctly ---
+        # Get all columns that are numbers (i.e., the weeks) and sort them
+        week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
+        
+        # Recalculate total wins based on the sorted list of weeks
+        pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
+        
+        # Create the final, ordered list of columns for the display
+        final_cols = week_cols + ['Total Wins']
+        pivot_df = pivot_df[final_cols]
+        
+        # Sort the entire table by the new 'Total Wins' column
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
+        
         st.dataframe(pivot_df, use_container_width=True)
+
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
+
 
 # --- UI Component Functions ---
 
@@ -240,7 +256,6 @@ def main_app():
     tab1, tab2, tab3 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard", "🔴 Live Games"])
 
     with tab1:
-        # (Code for Tab 1 remains unchanged)
         st.title("Weekly Picks Selection")
         current_week = int(st.selectbox(
             "Select Week",
@@ -306,38 +321,24 @@ def main_app():
 
     with tab2:
         st.title("League Scoreboard")
-        
-        # --- NEW: Manual Score Adjustment Form ---
         with st.expander("🛠️ Manual Score Adjustment"):
             with st.form("manual_update_form"):
                 st.write("Use this form to add or update scores for weeks not covered by the API, such as Week 0.")
-                
                 manual_user = st.selectbox("Select User", options=list(USERS.keys()))
                 manual_week = st.number_input("Enter Week", min_value=0, step=1, value=0)
                 manual_wins = st.number_input("Enter Total Wins", min_value=0, step=1)
-                
                 submitted = st.form_submit_button("Submit Manual Score")
-                
                 if submitted:
                     try:
                         with st.connection("db", type="sql").session as s:
-                            # Delete existing entry to prevent duplicates, then insert the new one
-                            s.execute(
-                                text('DELETE FROM scoreboard WHERE "user" = :user AND week = :week;'),
-                                params={"user": manual_user, "week": manual_week}
-                            )
-                            s.execute(
-                                text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'),
-                                params={"user": manual_user, "week": manual_week, "wins": manual_wins}
-                            )
+                            s.execute(text('DELETE FROM scoreboard WHERE "user" = :user AND week = :week;'), params={"user": manual_user, "week": manual_week})
+                            s.execute(text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'), params={"user": manual_user, "week": manual_week, "wins": manual_wins})
                             s.commit()
                         st.success(f"Successfully updated Week {manual_week} score for {manual_user} to {manual_wins} wins.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to update database: {e}")
-
         st.divider()
-        
         st.subheader("Update Weekly Scores (Automatic)")
         max_week = get_current_week()
         updatable_weeks = range(1, max_week + 1)
@@ -347,12 +348,10 @@ def main_app():
             week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
             if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                 update_scoreboard(week_to_update, datetime.datetime.now().year)
-        
         st.divider()
         display_scoreboard()
 
     with tab3:
-        # (Code for Tab 3 remains unchanged)
         st.title("🔴 Live Games")
         current_week = get_current_week()
         current_year = datetime.datetime.now().year
@@ -387,7 +386,7 @@ def main_app():
                         else:
                             score_str = "Pending / Final"; status = "N/A"
                         leaderboard_data.append({
-                            "User": row['user'], "Picked Team": team, 
+                            "User": row['user'], "Picked Team": team,
                             "Opponent": game_info.get(team, {}).get('opponent', 'N/A'),
                             "Live Score": score_str, "Status": status
                         })
