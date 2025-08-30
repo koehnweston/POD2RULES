@@ -149,44 +149,6 @@ def fetch_betting_lines(year, week):
                 betting_lines[game['homeTeam']] = spread
                 betting_lines[game['awayTeam']] = -spread
     return betting_lines
-    
-@st.cache_data(ttl=86400)
-def fetch_team_data():
-    """Fetches all team data, primarily for logos."""
-    teams_data, error = fetch_api_data("teams", {})
-    if error or not teams_data:
-        return {}
-    
-    team_logos = {}
-    for team in teams_data:
-        if team.get('logos'):
-            team_logos[team['school']] = team['logos'][0]
-    return team_logos
-
-@st.cache_data(ttl=60)
-def fetch_live_game_details(year, week):
-    """Fetches live score and status data for all games in a week."""
-    games_data, error = fetch_api_data("scoreboard", {'classification': 'fbs', 'year': year, 'week': week})
-    if error or not games_data:
-        return {}
-        
-    live_details = {}
-    for game in games_data:
-        home_team = game.get('homeTeam', {}).get('name')
-        away_team = game.get('awayTeam', {}).get('name')
-        home_pts = game.get('homeTeam', {}).get('points')
-        away_pts = game.get('awayTeam', {}).get('points')
-        game_status = game.get('status')
-        
-        if all([home_team, away_team, home_pts is not None, away_pts is not None]):
-            live_details[home_team] = {
-                'score': home_pts, 'opponent_score': away_pts, 'clock': game_status
-            }
-            live_details[away_team] = {
-                'score': away_pts, 'opponent_score': home_pts, 'clock': game_status
-            }
-    return live_details
-
 
 # --- Scoreboard Logic (with SQL Database) ---
 
@@ -287,7 +249,7 @@ def main_app():
             st.session_state.clear()
             st.rerun()
 
-    tab1, tab2, tab3 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard", "🔴 Live Games"])
+    tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
 
     with tab1:
         st.title("Weekly Picks Selection")
@@ -433,76 +395,6 @@ def main_app():
         st.divider()
         display_scoreboard()
 
-    with tab3:
-        st.title("🔴 Live Scoreboard")
-        current_week = get_current_week()
-        current_year = datetime.datetime.now().year
-        st.subheader(f"Live Status for Week {current_week}")
-
-        # --- MODIFIED: Manual Refresh Button ---
-        if st.button("🔄 Refresh Live Scores"):
-            st.rerun()
-        # --- END MODIFIED ---
-
-        with st.spinner("Fetching live scores and team data..."):
-            live_details = fetch_live_game_details(current_year, current_week)
-            team_logos = fetch_team_data()
-            conn = st.connection("db", type="sql")
-            all_picks_df = conn.query(f'SELECT "user", team FROM picks WHERE week = {current_week};')
-
-        if all_picks_df.empty:
-            st.info("No picks have been submitted for this week yet.")
-        else:
-            live_standings = defaultdict(int)
-            all_picks_data = []
-
-            for _, row in all_picks_df.iterrows():
-                user, team = row['user'], row['team']
-                details = live_details.get(team)
-                
-                status_str, score_str, clock_str = "Pending", "N/A", "Not Started"
-                
-                if details:
-                    score_str = f"{details['score']} - {details['opponent_score']}"
-                    clock_str = details['clock']
-                    if details['score'] > details['opponent_score']:
-                        status_str = "Winning ✅"
-                        live_standings[user] += 1
-                    elif details['score'] < details['opponent_score']:
-                        status_str = "Losing ❌"
-                    else:
-                        status_str = "Tied 🤝"
-
-                all_picks_data.append({
-                    "User": user, "Logo": team_logos.get(team, ""), "Pick": team,
-                    "Score": score_str, "Game Clock": clock_str, "Status": status_str
-                })
-
-            st.subheader("Live Weekly Standings")
-            if not live_standings:
-                st.info("No games in progress with a winning team yet.")
-            else:
-                standings_df = pd.DataFrame(live_standings.items(), columns=["User", "Live Wins"])
-                standings_df = standings_df.sort_values(by="Live Wins", ascending=False).reset_index(drop=True)
-                st.dataframe(standings_df, hide_index=True, use_container_width=True)
-
-            st.divider()
-            st.subheader("All Live Picks")
-            leaderboard_df = pd.DataFrame(all_picks_data)
-
-            def style_status(val):
-                if "Winning" in val: return "background-color: #28a745; color: white;"
-                elif "Losing" in val: return "background-color: #dc3545; color: white;"
-                elif "Tied" in val: return "background-color: #ffc107; color: black;"
-                return ""
-
-            st.dataframe(
-                leaderboard_df.style.applymap(style_status, subset=['Status']),
-                column_config={"Logo": st.column_config.ImageColumn("Logo", width="small")},
-                hide_index=True,
-                use_container_width=True
-            )
-            
 # --- App Initialization and State Management ---
 
 if 'logged_in' not in st.session_state:
