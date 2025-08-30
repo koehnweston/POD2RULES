@@ -135,8 +135,7 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['awayTeam'])
     return winning_teams
 
-# --- NEW FUNCTION ---
-@st.cache_data(ttl=300) # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def fetch_completed_game_scores(year, week):
     """Fetches completed games and returns a dictionary with detailed scores."""
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
@@ -152,7 +151,6 @@ def fetch_completed_game_scores(year, week):
             scores[home_team] = {'score': home_pts, 'opponent_score': away_pts, 'win': home_pts > away_pts}
             scores[away_team] = {'score': away_pts, 'opponent_score': home_pts, 'win': away_pts > home_pts}
     return scores
-# --- END NEW FUNCTION ---
 
 @st.cache_data(ttl=3600)
 def fetch_betting_lines(year, week):
@@ -222,11 +220,22 @@ def display_scoreboard():
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         
+        # --- MODIFIED SECTION ---
+        # 1. Get and sort the numeric week columns first
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
+        
+        # 2. Calculate Total Wins using the numeric columns
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         
-        final_cols = week_cols + ['Total Wins']
+        # 3. Create the dictionary to rename columns for display
+        rename_dict = {col: f"Week {col}" for col in week_cols}
+        pivot_df.rename(columns=rename_dict, inplace=True)
+        
+        # 4. Create the final list of column names in the desired order
+        final_week_cols = [f"Week {col}" for col in week_cols]
+        final_cols = final_week_cols + ['Total Wins']
         pivot_df = pivot_df[final_cols]
+        # --- END MODIFIED SECTION ---
         
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
 
@@ -290,12 +299,9 @@ def main_app():
             key="week_selector_tab1"
         ).split(" ")[1])
 
-        # --- Data Fetching for the Picks Table ---
         with st.spinner(f"Fetching data for Week {current_week}..."):
             betting_lines = fetch_betting_lines(current_year, current_week)
-            # --- MODIFIED ---
             completed_scores = fetch_completed_game_scores(current_year, current_week)
-            # --- END MODIFIED ---
             conn = st.connection("db", type="sql")
             existing_picks_df = conn.query('SELECT team FROM picks WHERE "user" = :user AND week = :week;', params={"user": st.session_state.username, "week": current_week})
             existing_picks = set(existing_picks_df['team'])
@@ -309,19 +315,16 @@ def main_app():
             except FileNotFoundError:
                 st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
 
-        # --- Build the DataFrame with Results ---
         picks_data = []
         for team in st.session_state.my_teams:
             match_details = game_info.get(team, {})
             line = betting_lines.get(team)
             
-            # --- MODIFIED: Determine game result with score ---
             result_str = "Pending"
             if team in completed_scores:
                 game_result = completed_scores[team]
                 result_char = "W" if game_result['win'] else "L"
                 result_str = f"{result_char} ({game_result['score']}-{game_result['opponent_score']})"
-            # --- END MODIFIED ---
 
             picks_data.append({
                 "Select": team in existing_picks,
@@ -335,7 +338,6 @@ def main_app():
         cols_order = ['Select', 'My Team', 'Location', 'Opponent', 'Line', 'Result']
         picks_df = pd.DataFrame(picks_data)[cols_order] if picks_data else pd.DataFrame(columns=cols_order)
         
-        # --- Display Logic (Locked vs. Unlocked) ---
         picks_are_locked = are_picks_locked(current_week, current_year)
         
         if picks_are_locked:
