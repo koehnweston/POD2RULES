@@ -177,8 +177,7 @@ def update_scoreboard(week, year):
         st.cache_data.clear(); st.cache_resource.clear()
 
 def display_scoreboard():
-    """Loads scoreboard data from the database and displays it."""
-    st.header("🏆 Overall Standings")
+    """Loads scoreboard data and displays a leaderboard and a styled table."""
     try:
         conn = st.connection("db", type="sql")
         
@@ -202,17 +201,42 @@ def display_scoreboard():
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
         
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
+        pivot_df.sort_values(by='Total Wins', ascending=False, inplace=True)
         
+        # --- NEW: Leaderboard/Podium Section ---
+        st.header("🏆 League Podium")
+        top_users = pivot_df.head(3)
+        
+        if top_users.empty:
+            st.info("No scores yet to determine a leader.")
+        else:
+            cols = st.columns(len(top_users))
+            medals = ["🥇", "🥈", "🥉"]
+            for i, (index, row) in enumerate(top_users.iterrows()):
+                with cols[i]:
+                    st.metric(
+                        label=f"{medals[i]} {index}",
+                        value=int(row['Total Wins'])
+                    )
+
+        st.divider()
+
+        # --- Main Table with Styling ---
+        st.subheader("Full Season Standings")
         rename_dict = {col: f"Week {col}" for col in week_cols}
         pivot_df.rename(columns=rename_dict, inplace=True)
         
         final_week_cols = [f"Week {col}" for col in week_cols]
         final_cols = final_week_cols + ['Total Wins']
-        pivot_df = pivot_df[final_cols]
+        display_df = pivot_df[final_cols].astype(int)
         
-        pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
-
-        st.dataframe(pivot_df, use_container_width=True)
+        # Apply a background gradient to the 'Total Wins' column
+        styled_df = display_df.style.background_gradient(
+            cmap='summer_r',
+            subset=['Total Wins']
+        ).format(precision=0)
+            
+        st.dataframe(styled_df, use_container_width=True)
 
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -341,10 +365,19 @@ def main_app():
                         st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
 
     with tab2:
-        st.title("League Scoreboard")
+        st.title("🏈 League Scoreboard")
         
-        if st.session_state.username in ["Paul", "Weston"]:
-            with st.expander("👑 Admin: Set User Status Emojis"):
+        # Display the main scoreboard content first
+        display_scoreboard()
+        
+        st.divider()
+
+        # Group all management tools into a single expander
+        with st.expander("🛠️ League Management Tools"):
+            
+            # Admin Panel for emojis
+            if st.session_state.username in ["Paul", "Weston"]:
+                st.subheader("👑 Set User Status Emojis")
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
                     emoji = st.radio(
@@ -365,9 +398,10 @@ def main_app():
                         except Exception as e:
                             st.error(f"Database error: {e}")
 
-        with st.expander("🛠️ Manual Score Adjustment"):
+            # Manual Score Adjustment
+            st.subheader("Manual Score Adjustment")
             with st.form("manual_update_form"):
-                st.write("Use this form to add or update scores for weeks not covered by the API, such as Week 0.")
+                st.write("Use this form to add or update scores for weeks not covered by the API (e.g., Week 0).")
                 manual_user = st.selectbox("Select User", options=list(USERS.keys()), key="manual_user_select")
                 manual_week = st.number_input("Enter Week", min_value=0, step=1, value=0)
                 manual_wins = st.number_input("Enter Total Wins", min_value=0, step=1)
@@ -382,18 +416,17 @@ def main_app():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to update database: {e}")
-        st.divider()
-        st.subheader("Update Weekly Scores (Automatic)")
-        max_week = get_current_week()
-        updatable_weeks = range(1, max_week + 1)
-        if not updatable_weeks:
-            st.info("No weeks are available to update yet.")
-        else:
-            week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
-            if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
-                update_scoreboard(week_to_update, datetime.datetime.now().year)
-        st.divider()
-        display_scoreboard()
+            
+            # Update Weekly Scores
+            st.subheader("Update Weekly Scores (Automatic)")
+            max_week = get_current_week()
+            updatable_weeks = range(1, max_week + 1)
+            if not updatable_weeks:
+                st.info("No weeks are available to update yet.")
+            else:
+                week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
+                if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
+                    update_scoreboard(week_to_update, datetime.datetime.now().year)
 
 # --- App Initialization and State Management ---
 
