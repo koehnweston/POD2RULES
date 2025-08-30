@@ -439,7 +439,11 @@ def main_app():
         current_year = datetime.datetime.now().year
         st.subheader(f"Live Status for Week {current_week}")
 
-        # This block now runs without the time check
+        # --- MODIFIED: Manual Refresh Button ---
+        if st.button("🔄 Refresh Live Scores"):
+            st.rerun()
+        # --- END MODIFIED ---
+
         with st.spinner("Fetching live scores and team data..."):
             live_details = fetch_live_game_details(current_year, current_week)
             team_logos = fetch_team_data()
@@ -495,13 +499,10 @@ def main_app():
             st.dataframe(
                 leaderboard_df.style.applymap(style_status, subset=['Status']),
                 column_config={"Logo": st.column_config.ImageColumn("Logo", width="small")},
-                hide_index=True, use_container_width=True
+                hide_index=True,
+                use_container_width=True
             )
             
-            st.caption("Scoreboard auto-refreshes every 60 seconds.")
-            time.sleep(60)
-            st.rerun()
-
 # --- App Initialization and State Management ---
 
 if 'logged_in' not in st.session_state:
