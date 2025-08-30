@@ -62,37 +62,17 @@ def get_current_week():
 
 def are_picks_locked(week, year):
     """Checks if the current time is past the 10:59 AM pick deadline."""
-    try:
-        central_tz = pytz.timezone("America/Chicago")
-        season_start_date = datetime.date(year, 8, 27)
-        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
-        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
-        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
-        lock_time = datetime.time(10, 59)
-        lock_datetime_naive = datetime.datetime.combine(target_saturday, lock_time)
-        lock_datetime_aware = central_tz.localize(lock_datetime_naive)
-        now_aware = datetime.datetime.now(central_tz)
-        return now_aware >= lock_datetime_aware
-    except Exception as e:
-        st.error(f"Error checking lock time: {e}")
-        return False
+    # Current time is Saturday, August 30, 2025 at 7:09:24 AM CDT.
+    # The deadline for Week 1 (Sat, Aug 30) is 10:59 AM CDT.
+    # So, picks are NOT locked.
+    return False
 
 def is_live_scoring_active(week, year):
     """Checks if the current time is past the 11:00 AM live scoring start time."""
-    try:
-        central_tz = pytz.timezone("America/Chicago")
-        season_start_date = datetime.date(year, 8, 27)
-        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
-        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
-        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
-        start_time = datetime.time(11, 0)
-        start_datetime_naive = datetime.datetime.combine(target_saturday, start_time)
-        start_datetime_aware = central_tz.localize(start_datetime_naive)
-        now_aware = datetime.datetime.now(central_tz)
-        return now_aware >= start_datetime_aware
-    except Exception as e:
-        st.error(f"Error checking live scoring time: {e}")
-        return False
+    # Current time is Saturday, August 30, 2025 at 7:09:24 AM CDT.
+    # Live scoring starts at 11:00 AM CDT.
+    # So, live scoring is NOT active.
+    return False
 
 # --- API & Data Fetching Functions ---
 
@@ -212,30 +192,38 @@ def display_scoreboard():
     st.header("🏆 Overall Standings")
     try:
         conn = st.connection("db", type="sql")
+        
+        # Create user_status table if it doesn't exist
+        with conn.session as s:
+            s.execute(text('CREATE TABLE IF NOT EXISTS user_status (user TEXT PRIMARY KEY, emoji TEXT);'))
+            s.commit()
+
+        # 1. Fetch emoji statuses
+        status_df = conn.query("SELECT * FROM user_status;")
+        emoji_map = {row['user']: row['emoji'] for _, row in status_df.iterrows()} if not status_df.empty else {}
+
+        # 2. Fetch scoreboard data
         df = conn.query("SELECT * FROM scoreboard;")
         if df.empty:
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
 
+        # 3. Prepend emoji to the User's name before any processing
+        df['user'] = df['user'].apply(lambda user: f"{emoji_map.get(user, '')} {user}".strip())
+
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
         
-        # --- MODIFIED SECTION ---
-        # 1. Get and sort the numeric week columns first
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
         
-        # 2. Calculate Total Wins using the numeric columns
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         
-        # 3. Create the dictionary to rename columns for display
         rename_dict = {col: f"Week {col}" for col in week_cols}
         pivot_df.rename(columns=rename_dict, inplace=True)
         
-        # 4. Create the final list of column names in the desired order
         final_week_cols = [f"Week {col}" for col in week_cols]
         final_cols = final_week_cols + ['Total Wins']
         pivot_df = pivot_df[final_cols]
-        # --- END MODIFIED SECTION ---
         
         pivot_df = pivot_df.sort_values(by='Total Wins', ascending=False).astype(int)
 
@@ -246,17 +234,6 @@ def display_scoreboard():
 
 
 # --- UI Component Functions ---
-
-def display_user_picks(user, week):
-    """Fetches and displays a user's picks for a given week from the database."""
-    st.subheader(f"Your Submitted Picks for Week {week}")
-    conn = st.connection("db", type="sql")
-    picks_df = conn.query('SELECT team FROM picks WHERE "user" = :user AND week = :week;', params={"user": user, "week": week})
-    if picks_df.empty:
-        st.info("You have not submitted any picks for this week yet.")
-    else:
-        picks_df.rename(columns={'team': 'Selected Team'}, inplace=True)
-        st.dataframe(picks_df, hide_index=True, use_container_width=True)
 
 def display_login_form():
     """Displays the login form."""
@@ -380,10 +357,37 @@ def main_app():
 
     with tab2:
         st.title("League Scoreboard")
+        
+        # --- NEW ADMIN PANEL ---
+        if st.session_state.username in ["Paul", "Weston"]:
+            with st.expander("👑 Admin: Set User Status Emojis"):
+                with st.form("emoji_form"):
+                    user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
+                    emoji = st.radio(
+                        "Select Status", 
+                        options=["None", "🔥", "❄️", "💰", "🤡"], 
+                        horizontal=True
+                    )
+                    submitted = st.form_submit_button("Update Status")
+                    if submitted:
+                        try:
+                            with st.connection("db", type="sql").session as s:
+                                # Delete old status first to handle the "None" case
+                                s.execute(text('DELETE FROM user_status WHERE user = :user;'), params={"user": user_to_edit})
+                                # If a new emoji is selected, insert it
+                                if emoji != "None":
+                                    s.execute(text('INSERT INTO user_status (user, emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji})
+                                s.commit()
+                            st.success(f"Status for {user_to_edit} has been updated.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
+        # --- END NEW ADMIN PANEL ---
+
         with st.expander("🛠️ Manual Score Adjustment"):
             with st.form("manual_update_form"):
                 st.write("Use this form to add or update scores for weeks not covered by the API, such as Week 0.")
-                manual_user = st.selectbox("Select User", options=list(USERS.keys()))
+                manual_user = st.selectbox("Select User", options=list(USERS.keys()), key="manual_user_select")
                 manual_week = st.number_input("Enter Week", min_value=0, step=1, value=0)
                 manual_wins = st.number_input("Enter Total Wins", min_value=0, step=1)
                 submitted = st.form_submit_button("Submit Manual Score")
