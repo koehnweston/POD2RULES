@@ -117,31 +117,25 @@ def fetch_api_data(endpoint, params):
 @st.cache_data(ttl=3600)
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
-    # --- DEBUG START ---
-    # This print will show in your terminal every time this function is triggered
-    print(f"--- DEBUG: Attempting to fetch game results for Year: {year}, Week: {week} ---")
-    # --- DEBUG END ---
+    # CHANGED: This message will now show in the app window.
+    st.info(f"⚙️ Attempting to fetch game results for Year: {year}, Week: {week}...")
     
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
     
     if error:
-        st.error(error)
-        # --- DEBUG START ---
-        print(f"--- DEBUG: API Call FAILED. Error: {error} ---")
-        # --- DEBUG END ---
+        st.error(error) # This was already here
+        # CHANGED: Added a warning in the app window for a failed API call.
+        st.warning(f"DEBUG: API Call FAILED. Error: {error}")
         return set()
         
     if not games_data:
-        st.warning(f"No game data found for Week {week}.")
-        # --- DEBUG START ---
-        print("--- DEBUG: API Call SUCCESSFUL, but received NO game data. The week may not have started.")
-        # --- DEBUG END ---
+        st.warning(f"No game data found for Week {week}.") # This was already here
+        # CHANGED: Added an info box for a successful but empty API response.
+        st.info("DEBUG: API Call was successful but returned no game data. The week may not have started.")
         return set()
 
-    # --- DEBUG START ---
-    # If the code reaches here, the API call was successful and returned data.
-    print(f"--- DEBUG: API Call SUCCESSFUL. Received data for {len(games_data)} games. ---")
-    # --- DEBUG END ---
+    # CHANGED: Added a success message to the app window.
+    st.success(f"✅ DEBUG: API Call SUCCESSFUL. Received data for {len(games_data)} games.")
     
     winning_teams = set()
     for game in games_data:
@@ -435,4 +429,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
