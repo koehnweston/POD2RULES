@@ -135,17 +135,18 @@ def fetch_game_results(year, week):
 
     st.success(f"✅ DEBUG: API Call SUCCESSFUL. Received data for {len(games_data)} games.")
 
-    # --- NEW DEBUG BLOCK TO INSPECT A GAME OBJECT ---
-    if games_data: # Make sure there is data before trying to access it
+    # --- ADJUSTED DEBUG BLOCK ---
+    if games_data:
         print("\n" + "="*50)
-        print("--- DEBUG: INSPECTING FIRST GAME OBJECT FROM API ---")
-        pprint.pprint(games_data[0]) # Pretty print the first game in the list
+        # CHANGED: We are now printing the ENTIRE response to see its structure
+        print("--- DEBUG: INSPECTING THE ENTIRE API RESPONSE ---")
+        pprint.pprint(games_data) 
         print("="*50 + "\n")
-    # --- END OF NEW DEBUG BLOCK ---
+    # --- END OF ADJUSTED DEBUG BLOCK ---
 
     winning_teams = set()
+    # This loop will likely fail, but we need the print output above to know how to fix it.
     for game in games_data:
-        # This condition is what we need to verify against the data printed above
         if game.get('home_points') is not None and game.get('away_points') is not None:
             if game['home_points'] > game['away_points']:
                 winning_teams.add(game['home_team'])
@@ -153,7 +154,7 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['away_team'])
 
     if not winning_teams:
-        st.warning("🔍 DEBUG: Found 0 completed games after checking all 197 results. The condition `game.get('home_points') is not None` may be incorrect for this API's data structure.")
+        st.warning("🔍 DEBUG: Found 0 completed games. Check terminal output for the API data structure.")
                 
     return winning_teams
 
@@ -439,6 +440,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
