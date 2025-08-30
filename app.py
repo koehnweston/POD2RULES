@@ -147,11 +147,12 @@ def fetch_game_results(year, week):
     winning_teams = set()
     # This loop will likely fail, but we need the print output above to know how to fix it.
     for game in games_data:
-        if game.get('home_points') is not None and game.get('away_points') is not None:
-            if game['home_points'] > game['away_points']:
-                winning_teams.add(game['home_team'])
-            elif game['away_points'] > game['home_points']:
-                winning_teams.add(game['away_team'])
+        # Check if the game is marked as completed and has scores
+        if game.get('completed') and game.get('homePoints') is not None and game.get('awayPoints') is not None:
+            if game['homePoints'] > game['awayPoints']:
+                winning_teams.add(game['homeTeam'])
+            elif game['awayPoints'] > game['homePoints']:
+                winning_teams.add(game['awayTeam'])
 
     if not winning_teams:
         st.warning("🔍 DEBUG: Found 0 completed games. Check terminal output for the API data structure.")
@@ -180,8 +181,8 @@ def fetch_live_scores(year, week):
     if error or not games_data: return {}
     live_scores = {}
     for game in games_data:
-        home_team, away_team = game.get('home_team'), game.get('away_team')
-        home_pts, away_pts = game.get('home_points'), game.get('away_points')
+        home_team, away_team = game.get('homeTeam'), game.get('awayTeam')
+        home_pts, away_pts = game.get('homePoints'), game.get('awayPoints')
         if all([home_team, away_team, home_pts is not None, away_pts is not None]):
             live_scores[home_team] = {'score': home_pts, 'opponent_score': away_pts}
             live_scores[away_team] = {'score': away_pts, 'opponent_score': home_pts}
@@ -440,6 +441,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
