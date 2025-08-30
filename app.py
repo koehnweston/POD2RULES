@@ -77,23 +77,6 @@ def are_picks_locked(week, year):
         st.error(f"Error checking lock time: {e}")
         return False
 
-def is_live_scoring_active(week, year):
-    """Checks if the current time is past the 11:00 AM live scoring start time."""
-    try:
-        central_tz = pytz.timezone("America/Chicago")
-        season_start_date = datetime.date(year, 8, 27)
-        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
-        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
-        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
-        start_time = datetime.time(11, 0)
-        start_datetime_naive = datetime.datetime.combine(target_saturday, start_time)
-        start_datetime_aware = central_tz.localize(start_datetime_naive)
-        now_aware = datetime.datetime.now(central_tz)
-        return now_aware >= start_datetime_aware
-    except Exception as e:
-        st.error(f"Error checking live scoring time: {e}")
-        return False
-
 # --- API & Data Fetching Functions ---
 
 def fetch_api_data(endpoint, params):
@@ -167,8 +150,7 @@ def fetch_betting_lines(year, week):
                 betting_lines[game['awayTeam']] = -spread
     return betting_lines
     
-# --- NEW ---
-@st.cache_data(ttl=86400) # Cache for a full day
+@st.cache_data(ttl=86400)
 def fetch_team_data():
     """Fetches all team data, primarily for logos."""
     teams_data, error = fetch_api_data("teams", {})
@@ -181,7 +163,6 @@ def fetch_team_data():
             team_logos[team['school']] = team['logos'][0]
     return team_logos
 
-# --- MODIFIED ---
 @st.cache_data(ttl=60)
 def fetch_live_game_details(year, week):
     """Fetches live score and status data for all games in a week."""
@@ -191,12 +172,11 @@ def fetch_live_game_details(year, week):
         
     live_details = {}
     for game in games_data:
-        # Essential details
         home_team = game.get('homeTeam', {}).get('name')
         away_team = game.get('awayTeam', {}).get('name')
         home_pts = game.get('homeTeam', {}).get('points')
         away_pts = game.get('awayTeam', {}).get('points')
-        game_status = game.get('status') # e.g., "2nd QTR 8:24", "Halftime", "Final"
+        game_status = game.get('status')
         
         if all([home_team, away_team, home_pts is not None, away_pts is not None]):
             live_details[home_team] = {
@@ -453,88 +433,74 @@ def main_app():
         st.divider()
         display_scoreboard()
 
-    # --- ENHANCED LIVE SCOREBOARD TAB ---
     with tab3:
         st.title("🔴 Live Scoreboard")
         current_week = get_current_week()
         current_year = datetime.datetime.now().year
-        
-        if not is_live_scoring_active(current_week, current_year):
-            st.info("Live scoring for the current week will begin at 11:00 AM Central Time on Saturday.")
+        st.subheader(f"Live Status for Week {current_week}")
+
+        # This block now runs without the time check
+        with st.spinner("Fetching live scores and team data..."):
+            live_details = fetch_live_game_details(current_year, current_week)
+            team_logos = fetch_team_data()
+            conn = st.connection("db", type="sql")
+            all_picks_df = conn.query(f'SELECT "user", team FROM picks WHERE week = {current_week};')
+
+        if all_picks_df.empty:
+            st.info("No picks have been submitted for this week yet.")
         else:
-            with st.spinner("Fetching live scores and team data..."):
-                live_details = fetch_live_game_details(current_year, current_week)
-                team_logos = fetch_team_data()
-                conn = st.connection("db", type="sql")
-                all_picks_df = conn.query(f'SELECT "user", team FROM picks WHERE week = {current_week};')
+            live_standings = defaultdict(int)
+            all_picks_data = []
 
-            if all_picks_df.empty:
-                st.info("No picks have been submitted for this week yet.")
-            else:
-                live_standings = defaultdict(int)
-                all_picks_data = []
-
-                # Process all picks to build tables
-                for _, row in all_picks_df.iterrows():
-                    user, team = row['user'], row['team']
-                    details = live_details.get(team)
-                    
-                    status_str = "Pending"
-                    score_str = "N/A"
-                    clock_str = "Not Started"
-                    
-                    if details:
-                        score_str = f"{details['score']} - {details['opponent_score']}"
-                        clock_str = details['clock']
-                        if details['score'] > details['opponent_score']:
-                            status_str = "Winning ✅"
-                            live_standings[user] += 1
-                        elif details['score'] < details['opponent_score']:
-                            status_str = "Losing ❌"
-                        else:
-                            status_str = "Tied 🤝"
-
-                    all_picks_data.append({
-                        "User": user,
-                        "Logo": team_logos.get(team, ""),
-                        "Pick": team,
-                        "Score": score_str,
-                        "Game Clock": clock_str,
-                        "Status": status_str
-                    })
-
-                # --- 1. Display Live Standings Table ---
-                st.subheader("Live Weekly Standings")
-                if not live_standings:
-                    st.info("No games in progress with a winning team yet.")
-                else:
-                    standings_df = pd.DataFrame(live_standings.items(), columns=["User", "Live Wins"])
-                    standings_df = standings_df.sort_values(by="Live Wins", ascending=False).reset_index(drop=True)
-                    st.dataframe(standings_df, hide_index=True, use_container_width=True)
-
-                st.divider()
-
-                # --- 2. Display Full, Color-Coded Table with Logos ---
-                st.subheader("All Live Picks")
-                leaderboard_df = pd.DataFrame(all_picks_data)
-
-                def style_status(val):
-                    if "Winning" in val: return "background-color: #28a745; color: white;"
-                    elif "Losing" in val: return "background-color: #dc3545; color: white;"
-                    elif "Tied" in val: return "background-color: #ffc107; color: black;"
-                    return ""
-
-                st.dataframe(
-                    leaderboard_df.style.applymap(style_status, subset=['Status']),
-                    column_config={"Logo": st.column_config.ImageColumn("Logo", width="small")},
-                    hide_index=True,
-                    use_container_width=True
-                )
+            for _, row in all_picks_df.iterrows():
+                user, team = row['user'], row['team']
+                details = live_details.get(team)
                 
-                st.caption("Scoreboard auto-refreshes every 60 seconds.")
-                time.sleep(60)
-                st.rerun()
+                status_str, score_str, clock_str = "Pending", "N/A", "Not Started"
+                
+                if details:
+                    score_str = f"{details['score']} - {details['opponent_score']}"
+                    clock_str = details['clock']
+                    if details['score'] > details['opponent_score']:
+                        status_str = "Winning ✅"
+                        live_standings[user] += 1
+                    elif details['score'] < details['opponent_score']:
+                        status_str = "Losing ❌"
+                    else:
+                        status_str = "Tied 🤝"
 
+                all_picks_data.append({
+                    "User": user, "Logo": team_logos.get(team, ""), "Pick": team,
+                    "Score": score_str, "Game Clock": clock_str, "Status": status_str
+                })
+
+            st.subheader("Live Weekly Standings")
+            if not live_standings:
+                st.info("No games in progress with a winning team yet.")
+            else:
+                standings_df = pd.DataFrame(live_standings.items(), columns=["User", "Live Wins"])
+                standings_df = standings_df.sort_values(by="Live Wins", ascending=False).reset_index(drop=True)
+                st.dataframe(standings_df, hide_index=True, use_container_width=True)
+
+            st.divider()
+            st.subheader("All Live Picks")
+            leaderboard_df = pd.DataFrame(all_picks_data)
+
+            def style_status(val):
+                if "Winning" in val: return "background-color: #28a745; color: white;"
+                elif "Losing" in val: return "background-color: #dc3545; color: white;"
+                elif "Tied" in val: return "background-color: #ffc107; color: black;"
+                return ""
+
+            st.dataframe(
+                leaderboard_df.style.applymap(style_status, subset=['Status']),
+                column_config={"Logo": st.column_config.ImageColumn("Logo", width="small")},
+                hide_index=True, use_container_width=True
+            )
+            
+            st.caption("Scoreboard auto-refreshes every 60 seconds.")
+            time.sleep(60)
+            st.rerun()
 
 # --- App Initialization and State Management ---
 
