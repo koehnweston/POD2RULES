@@ -117,33 +117,41 @@ def fetch_api_data(endpoint, params):
 @st.cache_data(ttl=3600)
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
-    # CHANGED: This message will now show in the app window.
     st.info(f"⚙️ Attempting to fetch game results for Year: {year}, Week: {week}...")
     
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
     
     if error:
-        st.error(error) # This was already here
-        # CHANGED: Added a warning in the app window for a failed API call.
+        st.error(error)
         st.warning(f"DEBUG: API Call FAILED. Error: {error}")
         return set()
         
     if not games_data:
-        st.warning(f"No game data found for Week {week}.") # This was already here
-        # CHANGED: Added an info box for a successful but empty API response.
-        st.info("DEBUG: API Call was successful but returned no game data. The week may not have started.")
+        st.warning(f"No game data found for Week {week}.")
+        st.info("DEBUG: API Call was successful but returned no game data.")
         return set()
 
-    # CHANGED: Added a success message to the app window.
     st.success(f"✅ DEBUG: API Call SUCCESSFUL. Received data for {len(games_data)} games.")
-    
+
+    # --- NEW DEBUG BLOCK TO INSPECT A GAME OBJECT ---
+    if games_data: # Make sure there is data before trying to access it
+        print("\n" + "="*50)
+        print("--- DEBUG: INSPECTING FIRST GAME OBJECT FROM API ---")
+        pprint.pprint(games_data[0]) # Pretty print the first game in the list
+        print("="*50 + "\n")
+    # --- END OF NEW DEBUG BLOCK ---
+
     winning_teams = set()
     for game in games_data:
+        # This condition is what we need to verify against the data printed above
         if game.get('home_points') is not None and game.get('away_points') is not None:
             if game['home_points'] > game['away_points']:
                 winning_teams.add(game['home_team'])
             elif game['away_points'] > game['home_points']:
                 winning_teams.add(game['away_team'])
+
+    if not winning_teams:
+        st.warning("🔍 DEBUG: Found 0 completed games after checking all 197 results. The condition `game.get('home_points') is not None` may be incorrect for this API's data structure.")
                 
     return winning_teams
 
@@ -429,5 +437,6 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
