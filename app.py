@@ -62,17 +62,37 @@ def get_current_week():
 
 def are_picks_locked(week, year):
     """Checks if the current time is past the 10:59 AM pick deadline."""
-    # Current time is Saturday, August 30, 2025 at 7:09:24 AM CDT.
-    # The deadline for Week 1 (Sat, Aug 30) is 10:59 AM CDT.
-    # So, picks are NOT locked.
-    return False
+    try:
+        central_tz = pytz.timezone("America/Chicago")
+        season_start_date = datetime.date(year, 8, 27)
+        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
+        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
+        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
+        lock_time = datetime.time(10, 59)
+        lock_datetime_naive = datetime.datetime.combine(target_saturday, lock_time)
+        lock_datetime_aware = central_tz.localize(lock_datetime_naive)
+        now_aware = datetime.datetime.now(central_tz)
+        return now_aware >= lock_datetime_aware
+    except Exception as e:
+        st.error(f"Error checking lock time: {e}")
+        return False
 
 def is_live_scoring_active(week, year):
     """Checks if the current time is past the 11:00 AM live scoring start time."""
-    # Current time is Saturday, August 30, 2025 at 7:09:24 AM CDT.
-    # Live scoring starts at 11:00 AM CDT.
-    # So, live scoring is NOT active.
-    return False
+    try:
+        central_tz = pytz.timezone("America/Chicago")
+        season_start_date = datetime.date(year, 8, 27)
+        days_until_saturday = (5 - season_start_date.weekday() + 7) % 7
+        first_saturday = season_start_date + datetime.timedelta(days=days_until_saturday)
+        target_saturday = first_saturday + datetime.timedelta(weeks=week - 1)
+        start_time = datetime.time(11, 0)
+        start_datetime_naive = datetime.datetime.combine(target_saturday, start_time)
+        start_datetime_aware = central_tz.localize(start_datetime_naive)
+        now_aware = datetime.datetime.now(central_tz)
+        return now_aware >= start_datetime_aware
+    except Exception as e:
+        st.error(f"Error checking live scoring time: {e}")
+        return False
 
 # --- API & Data Fetching Functions ---
 
@@ -193,22 +213,22 @@ def display_scoreboard():
     try:
         conn = st.connection("db", type="sql")
         
-        # Create user_status table if it doesn't exist
+        # Create user_status table if it doesn't exist, quoting the "user" column
         with conn.session as s:
-            s.execute(text('CREATE TABLE IF NOT EXISTS user_status (user TEXT PRIMARY KEY, emoji TEXT);'))
+            s.execute(text('CREATE TABLE IF NOT EXISTS user_status ("user" TEXT PRIMARY KEY, emoji TEXT);'))
             s.commit()
 
-        # 1. Fetch emoji statuses
+        # Fetch emoji statuses
         status_df = conn.query("SELECT * FROM user_status;")
         emoji_map = {row['user']: row['emoji'] for _, row in status_df.iterrows()} if not status_df.empty else {}
 
-        # 2. Fetch scoreboard data
+        # Fetch scoreboard data
         df = conn.query("SELECT * FROM scoreboard;")
         if df.empty:
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
 
-        # 3. Prepend emoji to the User's name before any processing
+        # Prepend emoji to the user's name before any processing
         df['user'] = df['user'].apply(lambda user: f"{emoji_map.get(user, '')} {user}".strip())
 
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
@@ -358,7 +378,6 @@ def main_app():
     with tab2:
         st.title("League Scoreboard")
         
-        # --- NEW ADMIN PANEL ---
         if st.session_state.username in ["Paul", "Weston"]:
             with st.expander("👑 Admin: Set User Status Emojis"):
                 with st.form("emoji_form"):
@@ -373,16 +392,17 @@ def main_app():
                         try:
                             with st.connection("db", type="sql").session as s:
                                 # Delete old status first to handle the "None" case
-                                s.execute(text('DELETE FROM user_status WHERE user = :user;'), params={"user": user_to_edit})
-                                # If a new emoji is selected, insert it
+                                s.execute(text('DELETE FROM user_status WHERE "user" = :user;'), params={"user": user_to_edit})
+                                
                                 if emoji != "None":
-                                    s.execute(text('INSERT INTO user_status (user, emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji})
+                                    # Insert new status if one was selected
+                                    s.execute(text('INSERT INTO user_status ("user", emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji})
+                                
                                 s.commit()
                             st.success(f"Status for {user_to_edit} has been updated.")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Database error: {e}")
-        # --- END NEW ADMIN PANEL ---
 
         with st.expander("🛠️ Manual Score Adjustment"):
             with st.form("manual_update_form"):
