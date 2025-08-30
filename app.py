@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from sqlalchemy import text
 import pprint
+import matplotlib  
 
 
 # --- Page and App Configuration ---
@@ -442,3 +443,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
