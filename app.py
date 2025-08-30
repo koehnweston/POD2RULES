@@ -51,9 +51,8 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # NOTE: Set to a fixed date for consistent testing; change to datetime.date.today() for production
     season_start_date = datetime.date(2025, 8, 27)
-    today = datetime.date.today() # In production: datetime.date.today()
+    today = datetime.date.today()
     if today < season_start_date:
         return 1
     days_since_start = (today - season_start_date).days
@@ -118,17 +117,15 @@ def fetch_api_data(endpoint, params):
     except requests.exceptions.RequestException as e:
         return None, f"Connection Error: {e}"
 
-@st.cache_data(ttl=300) # Cache results for 5 minutes
+@st.cache_data(ttl=300)
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error:
-        # Don't show API errors to the user in this case, just fail silently
         print(f"Failed to fetch game results: {error}")
         return set()
     if not games_data:
         return set()
-
     winning_teams = set()
     for game in games_data:
         if game.get('completed') and game.get('homePoints') is not None and game.get('awayPoints') is not None:
@@ -138,6 +135,24 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['awayTeam'])
     return winning_teams
 
+# --- NEW FUNCTION ---
+@st.cache_data(ttl=300) # Cache for 5 minutes
+def fetch_completed_game_scores(year, week):
+    """Fetches completed games and returns a dictionary with detailed scores."""
+    games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
+    if error or not games_data:
+        return {}
+    
+    scores = {}
+    for game in games_data:
+        if game.get('completed') and game.get('homePoints') is not None and game.get('awayPoints') is not None:
+            home_team, away_team = game['homeTeam'], game['awayTeam']
+            home_pts, away_pts = game['homePoints'], game['awayPoints']
+            
+            scores[home_team] = {'score': home_pts, 'opponent_score': away_pts, 'win': home_pts > away_pts}
+            scores[away_team] = {'score': away_pts, 'opponent_score': home_pts, 'win': away_pts > home_pts}
+    return scores
+# --- END NEW FUNCTION ---
 
 @st.cache_data(ttl=3600)
 def fetch_betting_lines(year, week):
@@ -147,7 +162,6 @@ def fetch_betting_lines(year, week):
     betting_lines = {}
     for game in lines_data:
         if game.get('lines'):
-            # Prefer 'consensus' provider, but fall back to first available line
             consensus = next((line for line in game['lines'] if line.get('provider') == 'consensus'), game['lines'][0])
             if consensus and consensus.get('spread'):
                 spread = float(consensus['spread'])
@@ -207,8 +221,7 @@ def display_scoreboard():
 
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
-
-        # Explicitly sort the week columns to handle Week 0 correctly
+        
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         
@@ -278,10 +291,11 @@ def main_app():
         ).split(" ")[1])
 
         # --- Data Fetching for the Picks Table ---
-        # This data is needed whether picks are locked or not
         with st.spinner(f"Fetching data for Week {current_week}..."):
             betting_lines = fetch_betting_lines(current_year, current_week)
-            winning_teams = fetch_game_results(current_year, current_week) # Fetch results regardless of lock status
+            # --- MODIFIED ---
+            completed_scores = fetch_completed_game_scores(current_year, current_week)
+            # --- END MODIFIED ---
             conn = st.connection("db", type="sql")
             existing_picks_df = conn.query('SELECT team FROM picks WHERE "user" = :user AND week = :week;', params={"user": st.session_state.username, "week": current_week})
             existing_picks = set(existing_picks_df['team'])
@@ -299,22 +313,21 @@ def main_app():
         picks_data = []
         for team in st.session_state.my_teams:
             match_details = game_info.get(team, {})
-            opponent = match_details.get('opponent', 'BYE WEEK')
             line = betting_lines.get(team)
             
-            # Determine game result
+            # --- MODIFIED: Determine game result with score ---
             result_str = "Pending"
-            if opponent != 'BYE WEEK':
-                if team in winning_teams:
-                    result_str = "Win ✅"
-                elif opponent in winning_teams:
-                    result_str = "Loss ❌"
+            if team in completed_scores:
+                game_result = completed_scores[team]
+                result_char = "W" if game_result['win'] else "L"
+                result_str = f"{result_char} ({game_result['score']}-{game_result['opponent_score']})"
+            # --- END MODIFIED ---
 
             picks_data.append({
                 "Select": team in existing_picks,
                 "My Team": team,
                 "Location": match_details.get('location', 'N/A'),
-                "Opponent": opponent,
+                "Opponent": match_details.get('opponent', 'BYE WEEK'),
                 "Line": f"+{line}" if line and line > 0 else str(line) if line is not None else "N/A",
                 "Result": result_str
             })
@@ -328,7 +341,6 @@ def main_app():
         if picks_are_locked:
             st.warning(f"🔒 Picks for Week {current_week} are locked.")
             st.subheader(f"Your Matchups & Results for Week {current_week}")
-            # Display the table with the 'Select' column disabled
             st.data_editor(
                 picks_df,
                 column_config={"Select": st.column_config.CheckboxColumn("Picked", default=False)},
@@ -341,7 +353,7 @@ def main_app():
                 edited_df = st.data_editor(
                     picks_df,
                     column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
-                    disabled=["My Team", "Location", "Opponent", "Line", "Result"], # Keep result column disabled
+                    disabled=["My Team", "Location", "Opponent", "Line", "Result"],
                     hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
                 )
                 selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
