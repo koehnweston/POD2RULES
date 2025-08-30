@@ -4,3 +4,5 @@ requests
 toml
 SQLAlchemy
 psycopg2-binary
+matplotlib
+
