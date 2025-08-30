@@ -166,20 +166,47 @@ def fetch_betting_lines(year, week):
                 betting_lines[game['homeTeam']] = spread
                 betting_lines[game['awayTeam']] = -spread
     return betting_lines
+    
+# --- NEW ---
+@st.cache_data(ttl=86400) # Cache for a full day
+def fetch_team_data():
+    """Fetches all team data, primarily for logos."""
+    teams_data, error = fetch_api_data("teams", {})
+    if error or not teams_data:
+        return {}
+    
+    team_logos = {}
+    for team in teams_data:
+        if team.get('logos'):
+            team_logos[team['school']] = team['logos'][0]
+    return team_logos
 
+# --- MODIFIED ---
 @st.cache_data(ttl=60)
-def fetch_live_scores(year, week):
-    """Fetches live score data for all games in a week."""
-    games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
-    if error or not games_data: return {}
-    live_scores = {}
+def fetch_live_game_details(year, week):
+    """Fetches live score and status data for all games in a week."""
+    games_data, error = fetch_api_data("scoreboard", {'classification': 'fbs', 'year': year, 'week': week})
+    if error or not games_data:
+        return {}
+        
+    live_details = {}
     for game in games_data:
-        home_team, away_team = game.get('homeTeam'), game.get('awayTeam')
-        home_pts, away_pts = game.get('homePoints'), game.get('awayPoints')
+        # Essential details
+        home_team = game.get('homeTeam', {}).get('name')
+        away_team = game.get('awayTeam', {}).get('name')
+        home_pts = game.get('homeTeam', {}).get('points')
+        away_pts = game.get('awayTeam', {}).get('points')
+        game_status = game.get('status') # e.g., "2nd QTR 8:24", "Halftime", "Final"
+        
         if all([home_team, away_team, home_pts is not None, away_pts is not None]):
-            live_scores[home_team] = {'score': home_pts, 'opponent_score': away_pts}
-            live_scores[away_team] = {'score': away_pts, 'opponent_score': home_pts}
-    return live_scores
+            live_details[home_team] = {
+                'score': home_pts, 'opponent_score': away_pts, 'clock': game_status
+            }
+            live_details[away_team] = {
+                'score': away_pts, 'opponent_score': home_pts, 'clock': game_status
+            }
+    return live_details
+
 
 # --- Scoreboard Logic (with SQL Database) ---
 
@@ -213,22 +240,18 @@ def display_scoreboard():
     try:
         conn = st.connection("db", type="sql")
         
-        # Create user_status table if it doesn't exist, quoting the "user" column
         with conn.session as s:
             s.execute(text('CREATE TABLE IF NOT EXISTS user_status ("user" TEXT PRIMARY KEY, emoji TEXT);'))
             s.commit()
 
-        # Fetch emoji statuses
         status_df = conn.query("SELECT * FROM user_status;")
         emoji_map = {row['user']: row['emoji'] for _, row in status_df.iterrows()} if not status_df.empty else {}
 
-        # Fetch scoreboard data
         df = conn.query("SELECT * FROM scoreboard;")
         if df.empty:
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
 
-        # Prepend emoji to the user's name before any processing
         df['user'] = df['user'].apply(lambda user: f"{emoji_map.get(user, '')} {user}".strip())
 
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
@@ -391,13 +414,9 @@ def main_app():
                     if submitted:
                         try:
                             with st.connection("db", type="sql").session as s:
-                                # Delete old status first to handle the "None" case
                                 s.execute(text('DELETE FROM user_status WHERE "user" = :user;'), params={"user": user_to_edit})
-                                
                                 if emoji != "None":
-                                    # Insert new status if one was selected
                                     s.execute(text('INSERT INTO user_status ("user", emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji})
-                                
                                 s.commit()
                             st.success(f"Status for {user_to_edit} has been updated.")
                             st.rerun()
@@ -434,53 +453,88 @@ def main_app():
         st.divider()
         display_scoreboard()
 
+    # --- ENHANCED LIVE SCOREBOARD TAB ---
     with tab3:
-        st.title("🔴 Live Games")
+        st.title("🔴 Live Scoreboard")
         current_week = get_current_week()
         current_year = datetime.datetime.now().year
-        st.subheader(f"Live Status for Week {current_week}")
+        
         if not is_live_scoring_active(current_week, current_year):
             st.info("Live scoring for the current week will begin at 11:00 AM Central Time on Saturday.")
         else:
-            with st.spinner("Fetching live scores..."):
-                live_scores = fetch_live_scores(current_year, current_week)
+            with st.spinner("Fetching live scores and team data..."):
+                live_details = fetch_live_game_details(current_year, current_week)
+                team_logos = fetch_team_data()
                 conn = st.connection("db", type="sql")
                 all_picks_df = conn.query(f'SELECT "user", team FROM picks WHERE week = {current_week};')
-                
-                game_info = {}
-                try:
-                    schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
-                    for _, row in schedule_df.iterrows():
-                        game_info[row['homeTeam']] = {'opponent': row['awayTeam']}
-                        game_info[row['awayTeam']] = {'opponent': row['homeTeam']}
-                except FileNotFoundError:
-                    st.warning(f"Schedule file for week {current_week} not found. Opponent data may be missing.")
+
+            if all_picks_df.empty:
+                st.info("No picks have been submitted for this week yet.")
+            else:
+                live_standings = defaultdict(int)
+                all_picks_data = []
+
+                # Process all picks to build tables
+                for _, row in all_picks_df.iterrows():
+                    user, team = row['user'], row['team']
+                    details = live_details.get(team)
                     
-                if all_picks_df.empty:
-                    st.info("No picks have been submitted for this week yet.")
-                else:
-                    leaderboard_data = []
-                    for _, row in all_picks_df.iterrows():
-                        team = row['team']
-                        score_info = live_scores.get(team)
-                        if score_info:
-                            score_str = f"{score_info['score']} - {score_info['opponent_score']}"
-                            if score_info['score'] > score_info['opponent_score']: status = "Winning ✅"
-                            elif score_info['score'] < score_info['opponent_score']: status = "Losing ❌"
-                            else: status = "Tied 🤝"
+                    status_str = "Pending"
+                    score_str = "N/A"
+                    clock_str = "Not Started"
+                    
+                    if details:
+                        score_str = f"{details['score']} - {details['opponent_score']}"
+                        clock_str = details['clock']
+                        if details['score'] > details['opponent_score']:
+                            status_str = "Winning ✅"
+                            live_standings[user] += 1
+                        elif details['score'] < details['opponent_score']:
+                            status_str = "Losing ❌"
                         else:
-                            score_str = "Pending / Final"; status = "N/A"
-                            
-                        leaderboard_data.append({
-                            "User": row['user'], "Picked Team": team,
-                            "Opponent": game_info.get(team, {}).get('opponent', 'N/A'),
-                            "Live Score": score_str, "Status": status
-                        })
-                    leaderboard_df = pd.DataFrame(leaderboard_data)
-                    st.dataframe(leaderboard_df.sort_values(by="User"), use_container_width=True, hide_index=True)
-                    st.caption("Leaderboard auto-refreshes every 60 seconds.")
-                    time.sleep(60)
-                    st.rerun()
+                            status_str = "Tied 🤝"
+
+                    all_picks_data.append({
+                        "User": user,
+                        "Logo": team_logos.get(team, ""),
+                        "Pick": team,
+                        "Score": score_str,
+                        "Game Clock": clock_str,
+                        "Status": status_str
+                    })
+
+                # --- 1. Display Live Standings Table ---
+                st.subheader("Live Weekly Standings")
+                if not live_standings:
+                    st.info("No games in progress with a winning team yet.")
+                else:
+                    standings_df = pd.DataFrame(live_standings.items(), columns=["User", "Live Wins"])
+                    standings_df = standings_df.sort_values(by="Live Wins", ascending=False).reset_index(drop=True)
+                    st.dataframe(standings_df, hide_index=True, use_container_width=True)
+
+                st.divider()
+
+                # --- 2. Display Full, Color-Coded Table with Logos ---
+                st.subheader("All Live Picks")
+                leaderboard_df = pd.DataFrame(all_picks_data)
+
+                def style_status(val):
+                    if "Winning" in val: return "background-color: #28a745; color: white;"
+                    elif "Losing" in val: return "background-color: #dc3545; color: white;"
+                    elif "Tied" in val: return "background-color: #ffc107; color: black;"
+                    return ""
+
+                st.dataframe(
+                    leaderboard_df.style.applymap(style_status, subset=['Status']),
+                    column_config={"Logo": st.column_config.ImageColumn("Logo", width="small")},
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                st.caption("Scoreboard auto-refreshes every 60 seconds.")
+                time.sleep(60)
+                st.rerun()
+
 
 # --- App Initialization and State Management ---
 
