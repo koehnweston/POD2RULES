@@ -85,13 +85,32 @@ def fetch_api_data(endpoint, params):
 @st.cache_data(ttl=3600)
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
+    # --- DEBUG START ---
+    # This print will show in your terminal every time this function is triggered
+    print(f"--- DEBUG: Attempting to fetch game results for Year: {year}, Week: {week} ---")
+    # --- DEBUG END ---
+    
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
+    
     if error:
         st.error(error)
+        # --- DEBUG START ---
+        print(f"--- DEBUG: API Call FAILED. Error: {error} ---")
+        # --- DEBUG END ---
         return set()
+        
     if not games_data:
         st.warning(f"No game data found for Week {week}.")
+        # --- DEBUG START ---
+        print("--- DEBUG: API Call SUCCESSFUL, but received NO game data. The week may not have started.")
+        # --- DEBUG END ---
         return set()
+
+    # --- DEBUG START ---
+    # If the code reaches here, the API call was successful and returned data.
+    print(f"--- DEBUG: API Call SUCCESSFUL. Received data for {len(games_data)} games. ---")
+    # --- DEBUG END ---
+    
     winning_teams = set()
     for game in games_data:
         if game.get('home_points') is not None and game.get('away_points') is not None:
@@ -99,6 +118,7 @@ def fetch_game_results(year, week):
                 winning_teams.add(game['home_team'])
             elif game['away_points'] > game['home_points']:
                 winning_teams.add(game['away_team'])
+                
     return winning_teams
 
 @st.cache_data(ttl=3600)
@@ -351,6 +371,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
