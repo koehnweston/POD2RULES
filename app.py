@@ -52,6 +52,7 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
+    # NOTE: The season start date is set to 2025.
     season_start_date = datetime.date(2025, 8, 27)
     today = datetime.date.today()
     if today < season_start_date:
@@ -125,13 +126,13 @@ def fetch_completed_game_scores(year, week):
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error or not games_data:
         return {}
-    
+
     scores = {}
     for game in games_data:
         if game.get('completed') and game.get('homePoints') is not None and game.get('awayPoints') is not None:
             home_team, away_team = game['homeTeam'], game['awayTeam']
             home_pts, away_pts = game['homePoints'], game['awayPoints']
-            
+
             scores[home_team] = {'score': home_pts, 'opponent_score': away_pts, 'win': home_pts > away_pts}
             scores[away_team] = {'score': away_pts, 'opponent_score': home_pts, 'win': away_pts > home_pts}
     return scores
@@ -144,6 +145,7 @@ def fetch_betting_lines(year, week):
     betting_lines = {}
     for game in lines_data:
         if game.get('lines'):
+            # Find the consensus line, or fallback to the first available line
             consensus = next((line for line in game['lines'] if line.get('provider') == 'consensus'), game['lines'][0])
             if consensus and consensus.get('spread'):
                 spread = float(consensus['spread'])
@@ -181,7 +183,7 @@ def display_scoreboard():
     """Loads scoreboard data and displays a leaderboard and a styled table."""
     try:
         conn = st.connection("db", type="sql")
-        
+
         with conn.session as s:
             s.execute(text('CREATE TABLE IF NOT EXISTS user_status ("user" TEXT PRIMARY KEY, emoji TEXT);'))
             s.commit()
@@ -198,16 +200,16 @@ def display_scoreboard():
 
         df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
         pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
-        
+
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
-        
+
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         pivot_df.sort_values(by='Total Wins', ascending=False, inplace=True)
-        
-        # --- NEW: Leaderboard/Podium Section ---
+
+        # --- Leaderboard/Podium Section ---
         st.header("🏆 League Podium")
         top_users = pivot_df.head(3)
-        
+
         if top_users.empty:
             st.info("No scores yet to determine a leader.")
         else:
@@ -226,17 +228,17 @@ def display_scoreboard():
         st.subheader("Full Season Standings")
         rename_dict = {col: f"Week {col}" for col in week_cols}
         pivot_df.rename(columns=rename_dict, inplace=True)
-        
+
         final_week_cols = [f"Week {col}" for col in week_cols]
         final_cols = final_week_cols + ['Total Wins']
         display_df = pivot_df[final_cols].astype(int)
-        
+
         # Apply a background gradient to the 'Total Wins' column
         styled_df = display_df.style.background_gradient(
             cmap='summer_r',
             subset=['Total Wins']
         ).format(precision=0)
-            
+
         st.dataframe(styled_df, use_container_width=True)
 
     except Exception as e:
@@ -292,7 +294,7 @@ def main_app():
             conn = st.connection("db", type="sql")
             existing_picks_df = conn.query('SELECT team FROM picks WHERE "user" = :user AND week = :week;', params={"user": st.session_state.username, "week": current_week})
             existing_picks = set(existing_picks_df['team'])
-            
+
             game_info = {}
             try:
                 schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
@@ -306,7 +308,7 @@ def main_app():
         for team in st.session_state.my_teams:
             match_details = game_info.get(team, {})
             line = betting_lines.get(team)
-            
+
             result_str = "Pending"
             if team in completed_scores:
                 game_result = completed_scores[team]
@@ -321,12 +323,12 @@ def main_app():
                 "Line": f"+{line}" if line and line > 0 else str(line) if line is not None else "N/A",
                 "Result": result_str
             })
-        
+
         cols_order = ['Select', 'My Team', 'Location', 'Opponent', 'Line', 'Result']
         picks_df = pd.DataFrame(picks_data)[cols_order] if picks_data else pd.DataFrame(columns=cols_order)
-        
+
         picks_are_locked = are_picks_locked(current_week, current_year)
-        
+
         if picks_are_locked:
             st.warning(f"🔒 Picks for Week {current_week} are locked.")
             st.subheader(f"Your Matchups & Results for Week {current_week}")
@@ -346,7 +348,7 @@ def main_app():
                     hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}"
                 )
                 selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
-                
+
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
@@ -367,23 +369,88 @@ def main_app():
 
     with tab2:
         st.title("🏈 League Scoreboard")
-        
+
         # Display the main scoreboard content first
         display_scoreboard()
-        
+
+        st.divider()
+
+        # --- NEW: WEEKLY REVIEW SECTION ---
+        st.header("🕵️‍♂️ Weekly Pick Review")
+        current_year = datetime.datetime.now().year
+        # A week is only reviewable after it has passed.
+        last_completed_week = get_current_week() - 1
+
+        if last_completed_week < 1:
+            st.info("No weeks have been completed yet for a review.")
+        else:
+            # Create a list of reviewable weeks and select the most recent by default
+            reviewable_weeks = range(1, last_completed_week + 1)
+            review_week = st.selectbox(
+                "Select a week to review",
+                options=reviewable_weeks,
+                index=len(reviewable_weeks) - 1,
+                format_func=lambda w: f"Week {w}"
+            )
+
+            with st.spinner(f"Gathering intel and expert opinions for Week {review_week}..."):
+                conn = st.connection("db", type="sql")
+                all_weekly_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {review_week};")
+                betting_lines = fetch_betting_lines(current_year, review_week)
+                game_results = fetch_completed_game_scores(current_year, review_week)
+
+            if all_weekly_picks_df.empty:
+                st.warning(f"No one submitted picks for Week {review_week}, so there's nothing to review!")
+            else:
+                picks_by_user = all_weekly_picks_df.groupby('user')
+
+                for user, user_picks_df in picks_by_user:
+                    with st.expander(f"**{user}'s Report Card for Week {review_week}**"):
+                        total_picks = len(user_picks_df)
+                        correct_picks, upset_wins, favorite_losses = 0, 0, 0
+
+                        review_data = []
+                        for _, pick_row in user_picks_df.iterrows():
+                            team = pick_row['team']
+                            is_correct = game_results.get(team, {}).get('win', False)
+                            line = betting_lines.get(team)
+
+                            if is_correct: correct_picks += 1
+                            if is_correct and line is not None and line > 0: upset_wins += 1
+                            if not is_correct and line is not None and line < 0: favorite_losses += 1
+                            
+                            line_str = f"+{line}" if line and line > 0 else str(line) if line is not None else "N/A"
+                            pick_type = "Favorite" if line is not None and line < 0 else "Upset Pick" if line is not None and line > 0 else "Even Match"
+                            outcome_str = "✅ Win" if is_correct else "❌ Loss" if team in game_results else "Pending"
+                            
+                            review_data.append({"Pick": team, "Line": line_str, "Type": pick_type, "Outcome": outcome_str})
+                        
+                        # --- Amusing Verbal Review ---
+                        st.markdown(f"##### Grade: **{correct_picks} / {total_picks}**")
+                        if correct_picks == total_picks and total_picks > 0:
+                            st.success("🔥 **Flawless Victory!** A perfect week. Are you a time traveler or just that good? Absolutely brilliant.")
+                        if upset_wins > 0:
+                            st.info(f"🧠 **Galaxy Brain Alert!** You successfully called **{upset_wins} upset(s)**. You zigged when Vegas zagged. Well played.")
+                        if favorite_losses > 0:
+                            st.warning(f"💥 **Bad Beat City!** You got burned by **{favorite_losses} supposed 'sure thing'(s)**. Vegas sends its 'condolences'.")
+                        if correct_picks == 0 and total_picks > 0:
+                            st.error("🤡 **The Jester Award!** A bold strategy to pick all losers. It's a statement, we're just not sure what it is.")
+                        
+                        st.dataframe(pd.DataFrame(review_data), hide_index=True, use_container_width=True)
+
+
         st.divider()
 
         # Group all management tools into a single expander
         with st.expander("🛠️ League Management Tools"):
-            
             # Admin Panel for emojis
             if st.session_state.username in ["Paul", "Weston"]:
                 st.subheader("👑 Set User Status Emojis")
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
                     emoji = st.radio(
-                        "Select Status", 
-                        options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑"], 
+                        "Select Status",
+                        options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑"],
                         horizontal=True
                     )
                     submitted = st.form_submit_button("Update Status")
@@ -417,7 +484,7 @@ def main_app():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to update database: {e}")
-            
+
             # Update Weekly Scores
             st.subheader("Update Weekly Scores (Automatic)")
             max_week = get_current_week()
