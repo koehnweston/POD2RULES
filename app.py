@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from sqlalchemy import text
 import pprint
-import matplotlib  
+import matplotlib
 
 
 # --- Page and App Configuration ---
@@ -383,7 +383,7 @@ def main_app():
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
                     emoji = st.radio(
                         "Select Status", 
-                        options=["None", "🔥", "❄️", "💰", "🤡"], 
+                        options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑"], 
                         horizontal=True
                     )
                     submitted = st.form_submit_button("Update Status")
@@ -443,4 +443,3 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
-
