@@ -79,27 +79,27 @@ def are_picks_locked(week, year):
         return False
 
 def calculate_parlay_odds(picked_teams, moneyline_data):
-    """Calculates the parlay odds for a list of picks and returns a formatted string."""
+    """Calculates the parlay odds for a list of picks, skipping teams with no odds."""
     if not picked_teams:
         return "N/A"
 
     total_decimal_odd = 1.0
-    all_picks_have_odds = True
+    picks_with_odds_count = 0
 
     for team in picked_teams:
         american_odd = moneyline_data.get(team)
         if american_odd is None:
-            all_picks_have_odds = False
-            break
+            continue  # Skip this team if no odds are available
 
+        picks_with_odds_count += 1
         if american_odd > 0:
             decimal_odd = (american_odd / 100) + 1
         else:
             decimal_odd = (100 / abs(american_odd)) + 1
         total_decimal_odd *= decimal_odd
 
-    if not all_picks_have_odds or total_decimal_odd == 1.0:
-        return "N/A (Missing odds)"
+    if picks_with_odds_count == 0:
+        return "N/A (No odds available)"
 
     if total_decimal_odd >= 2.0:
         final_american_odd = (total_decimal_odd - 1) * 100
@@ -175,31 +175,26 @@ def fetch_betting_lines(year, week):
     betting_data = defaultdict(dict)
     for game in lines_data:
         if game.get('lines'):
-            # Prioritize providers that reliably have full data
             preferred_providers = ['Bovada', 'DraftKings', 'consensus']
             line_to_use = None
             
-            # Find the best available line from our preferred providers
             for provider in preferred_providers:
                 found_line = next((line for line in game['lines'] if line.get('provider') == provider), None)
                 if found_line:
                     line_to_use = found_line
                     break
             
-            # Fallback to the first line if no preferred provider is found
             if not line_to_use:
                 line_to_use = game['lines'][0]
 
-            # Extract Spread
             if line_to_use.get('spread'):
                 try:
                     spread = float(line_to_use['spread'])
                     betting_data[game['homeTeam']]['spread'] = spread
                     betting_data[game['awayTeam']]['spread'] = -spread
                 except (ValueError, TypeError):
-                    pass # Ignore if spread is not a valid number
+                    pass 
 
-            # Extract Moneyline
             if line_to_use.get('homeMoneyline') is not None and line_to_use.get('awayMoneyline') is not None:
                 betting_data[game['homeTeam']]['moneyline'] = line_to_use['homeMoneyline']
                 betting_data[game['awayTeam']]['moneyline'] = line_to_use['awayMoneyline']
@@ -454,7 +449,6 @@ def main_app():
         
         st.divider()
 
-        # --- WEEKLY REVIEW SECTION (MOVED TO BOTTOM) ---
         st.header("🕵️‍♂️ Weekly Pick Review")
         current_year = datetime.datetime.now().year
         last_completed_week = get_current_week() - 1
@@ -482,6 +476,16 @@ def main_app():
                         total_picks = len(user_picks_df)
                         correct_picks, upset_wins, favorite_losses = 0, 0, 0
                         review_data, picked_teams_list = [], []
+
+                        if user == "Jared":
+                            is_chalk_eater, is_fish_bettor = False, False
+                            for _, pick_row in user_picks_df.iterrows():
+                                spread = betting_data.get(pick_row['team'], {}).get('spread')
+                                if spread is not None:
+                                    if spread < 0: is_chalk_eater = True
+                                    elif spread > 0: is_fish_bettor = True
+                            if is_fish_bettor: st.warning("🐠 **Fish Bet Detected!** Jared is swimming against the current by picking an underdog.")
+                            if is_chalk_eater: st.info("🍞 **Chalk Eater!** Jared is playing it safe with a favorite.")
 
                         for _, pick_row in user_picks_df.iterrows():
                             team = pick_row['team']
