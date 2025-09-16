@@ -409,7 +409,7 @@ def main_app():
                 st.subheader("👑 Set User Status Emojis")
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
-                    emoji = st.radio("Select Status", options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑"], horizontal=True)
+                    emoji = st.radio("Select Status", options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑", "🚗🔥"], horizontal=True)
                     if st.form_submit_button("Update Status"):
                         try:
                             with st.connection("db", type="sql").session as s:
