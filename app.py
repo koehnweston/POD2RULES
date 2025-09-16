@@ -274,18 +274,13 @@ def display_scoreboard():
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
 
-        # --- SIMPLIFIED CODE STARTS HERE ---
-
         # The map now just points to the filename.
         IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
 
-        # This function is now much simpler!
         # It just returns the filename if the status matches.
-        # No more 'os.path' needed. Streamlit does the work.
+        # Streamlit will automatically look in the 'static' folder.
         def get_image_filename(status_val):
             return IMAGE_MAP.get(status_val)
-
-        # --- SIMPLIFIED CODE ENDS HERE ---
 
         def format_user_display(row):
             status = row['status_val']
@@ -585,6 +580,7 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
 
