@@ -245,7 +245,6 @@ def display_scoreboard():
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
 
-        # Pivot with raw usernames first for accurate calculations
         pivot_df = df.pivot_table(index='user', columns='week', values='wins', aggfunc='sum').fillna(0)
 
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
@@ -263,7 +262,6 @@ def display_scoreboard():
             for i, (user, row) in enumerate(top_users_df.iterrows()):
                 with cols[i]:
                     user_status = emoji_map.get(user, '')
-                    # For metrics, use a placeholder for images, otherwise show emoji
                     display_status = user_status if not user_status.startswith(':') else '⭐'
                     label_str = f"{medals[i]} {display_status} {user}".strip()
                     st.metric(
@@ -273,11 +271,60 @@ def display_scoreboard():
         st.divider()
         st.subheader("Full Season Standings")
 
-        # Reset index to convert 'user' from index to a column for easier manipulation
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
 
+        # Defines the mapping from the database identifier to the filename
         IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
+        
+        # Gets the absolute path to the directory where the script is running
+        script_dir = os.path.dirname(__file__)
+
+        def get_image_path(status_val):
+            filename = IMAGE_MAP.get(status_val)
+            if filename:
+                # CORRECTED: Joins the script directory directly with the filename
+                path = os.path.join(script_dir, filename)
+                return path if os.path.exists(path) else None
+            return None
+
+        def format_user_display(row):
+            status = row['status_val']
+            if status and not status.startswith(':'):
+                return f"{status} {row['User Name']}".strip()
+            return row['User Name']
+
+        pivot_df['status_val'] = pivot_df['User Name'].map(emoji_map).fillna('')
+        pivot_df['Image'] = pivot_df['status_val'].apply(get_image_path)
+        pivot_df['User'] = pivot_df.apply(format_user_display, axis=1)
+
+        rename_dict = {col: f"Week {col}" for col in week_cols}
+        pivot_df.rename(columns=rename_dict, inplace=True)
+
+        final_week_cols = [f"Week {col}" for col in week_cols]
+        display_cols = ['Image', 'User'] + final_week_cols + ['Total Wins']
+        display_df = pivot_df[display_cols]
+        
+        for col in final_week_cols + ['Total Wins']:
+            display_df[col] = display_df[col].astype(int)
+
+        styled_df = display_df.style.background_gradient(
+            cmap='summer_r',
+            subset=['Total Wins']
+        ).format(precision=0)
+
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            column_config={
+                "Image": st.column_config.ImageColumn("Status", width="small"),
+                "User": st.column_config.TextColumn("User", width="medium"),
+            },
+            hide_index=True
+        )
+
+    except Exception as e:
+        st.error(f"Could not connect to or read from the database: {e}")
 
         def get_image_path(status_val):
             path = IMAGE_MAP.get(status_val)
@@ -589,3 +636,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
