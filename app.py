@@ -274,16 +274,13 @@ def display_scoreboard():
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
 
-        # Defines the mapping from the database identifier to the filename
         IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
         
-        # Gets the absolute path to the directory where the script is running
         script_dir = os.path.dirname(__file__)
 
         def get_image_path(status_val):
             filename = IMAGE_MAP.get(status_val)
             if filename:
-                # CORRECTED: Joins the script directory directly with the filename
                 path = os.path.join(script_dir, filename)
                 return path if os.path.exists(path) else None
             return None
@@ -323,55 +320,32 @@ def display_scoreboard():
             hide_index=True
         )
 
-    except Exception as e:
-        st.error(f"Could not connect to or read from the database: {e}")
+        # --- NEW DEBUGGING SECTION ---
+        with st.expander("🔍 Debug Info"):
+            st.write("**Database Status Values:**")
+            if not emoji_map:
+                st.write("No statuses are currently set in the database.")
+            else:
+                st.json(emoji_map)
 
-        def get_image_path(status_val):
-            path = IMAGE_MAP.get(status_val)
-            return path if path and os.path.exists(path) else None
-
-        def format_user_display(row):
-            status = row['status_val']
-            # If it's a standard emoji, prepend it to the name
-            if status and not status.startswith(':'):
-                return f"{status} {row['User Name']}".strip()
-            # Otherwise (it's an image or no status), just return the name
-            return row['User Name']
-
-        # Map status values from emoji_map to each user
-        pivot_df['status_val'] = pivot_df['User Name'].map(emoji_map).fillna('')
-        # Create a new column with paths to images if applicable
-        pivot_df['Image'] = pivot_df['status_val'].apply(get_image_path)
-        # Create the final user display name
-        pivot_df['User'] = pivot_df.apply(format_user_display, axis=1)
-
-        # Prepare the final dataframe for display
-        rename_dict = {col: f"Week {col}" for col in week_cols}
-        pivot_df.rename(columns=rename_dict, inplace=True)
-
-        final_week_cols = [f"Week {col}" for col in week_cols]
-        # Define the final column order, with Image and User first
-        display_cols = ['Image', 'User'] + final_week_cols + ['Total Wins']
-        display_df = pivot_df[display_cols]
-        
-        # Convert numeric columns to integers for clean display
-        for col in final_week_cols + ['Total Wins']:
-            display_df[col] = display_df[col].astype(int)
-
-        styled_df = display_df.style.background_gradient(
-            cmap='summer_r',
-            subset=['Total Wins']
-        ).format(precision=0)
-
-        st.dataframe(
-            styled_df,
-            use_container_width=True,
-            column_config={
-                "Image": st.column_config.ImageColumn("Status", width="small"),
-                "User": st.column_config.TextColumn("User", width="medium"),
-            },
-            hide_index=True
-        )
+            st.write("**Image Path Resolution:**")
+            debug_data = []
+            for user, status in emoji_map.items():
+                if status in IMAGE_MAP:
+                    filename = IMAGE_MAP[status]
+                    full_path = os.path.join(script_dir, filename)
+                    file_exists = os.path.exists(full_path)
+                    debug_data.append({
+                        "User": user,
+                        "Status ID": status,
+                        "Expected Filename": filename,
+                        "Full Path Checked": full_path,
+                        "File Found?": "✅ Yes" if file_exists else "❌ NO"
+                    })
+            if not debug_data:
+                st.write("No users have an image status set.")
+            else:
+                st.dataframe(debug_data, use_container_width=True)
 
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -636,4 +610,5 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
