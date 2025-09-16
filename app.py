@@ -171,19 +171,19 @@ def fetch_betting_lines(year, week):
     """Fetches betting lines (spread and moneyline) for a given week from the API."""
     lines_data, error = fetch_api_data("lines", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error or not lines_data: return {}
-    
+
     betting_data = defaultdict(dict)
     for game in lines_data:
         if game.get('lines'):
             preferred_providers = ['Bovada', 'DraftKings', 'consensus']
             line_to_use = None
-            
+
             for provider in preferred_providers:
                 found_line = next((line for line in game['lines'] if line.get('provider') == provider), None)
                 if found_line:
                     line_to_use = found_line
                     break
-            
+
             if not line_to_use:
                 line_to_use = game['lines'][0]
 
@@ -193,7 +193,7 @@ def fetch_betting_lines(year, week):
                     betting_data[game['homeTeam']]['spread'] = spread
                     betting_data[game['awayTeam']]['spread'] = -spread
                 except (ValueError, TypeError):
-                    pass 
+                    pass
 
             if line_to_use.get('homeMoneyline') is not None and line_to_use.get('awayMoneyline') is not None:
                 betting_data[game['homeTeam']]['moneyline'] = line_to_use['homeMoneyline']
@@ -409,7 +409,7 @@ def main_app():
                 st.subheader("👑 Set User Status Emojis")
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
-                    emoji = st.radio("Select Status", options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑", "🚗🔥"], horizontal=True)
+                    emoji = st.radio("Select Status", options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑", "🚗🔥", "🗑️🔥"], horizontal=True)
                     if st.form_submit_button("Update Status"):
                         try:
                             with st.connection("db", type="sql").session as s:
@@ -446,7 +446,7 @@ def main_app():
                 week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
                 if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
                     update_scoreboard(week_to_update, datetime.datetime.now().year)
-        
+
         st.divider()
 
         st.header("🕵️‍♂️ Weekly Pick Review")
@@ -496,21 +496,21 @@ def main_app():
                             if is_correct: correct_picks += 1
                             if is_correct and spread is not None and spread > 0: upset_wins += 1
                             if not is_correct and spread is not None and spread < 0: favorite_losses += 1
-                            
+
                             spread_str = f"+{spread}" if spread and spread > 0 else str(spread) if spread is not None else "N/A"
                             pick_type = "Favorite" if spread is not None and spread < 0 else "Upset Pick" if spread is not None and spread > 0 else "Even Match"
                             outcome_str = "✅ Win" if is_correct else "❌ Loss" if team in game_results else "Pending"
-                            
+
                             review_data.append({"Pick": team, "Spread": spread_str, "Type": pick_type, "Outcome": outcome_str})
-                        
+
                         parlay_str = calculate_parlay_odds(picked_teams_list, moneyline_odds)
                         st.markdown(f"##### Grade: **{correct_picks}/{total_picks}** | Hypothetical Parlay: **{parlay_str}**")
-                        
+
                         if correct_picks == total_picks and total_picks > 0: st.success("🔥 **Flawless Victory!** A perfect week. Are you a time traveler or just that good? Absolutely brilliant.")
                         if upset_wins > 0: st.info(f"🧠 **Galaxy Brain Alert!** You successfully called **{upset_wins} upset(s)**. You zigged when Vegas zagged. Well played.")
                         if favorite_losses > 0: st.warning(f"💥 **Bad Beat City!** You got burned by **{favorite_losses} supposed 'sure thing'(s)**. Vegas sends its 'condolences'.")
                         if correct_picks == 0 and total_picks > 0: st.error("🤡 **The Jester Award!** A bold strategy to pick all losers. It's a statement, we're just not sure what it is.")
-                        
+
                         st.dataframe(pd.DataFrame(review_data), hide_index=True, use_container_width=True)
 
 # --- App Initialization and State Management ---
