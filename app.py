@@ -52,6 +52,7 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
+    # Using a fixed date far in the future to ensure stability
     season_start_date = datetime.date(2025, 8, 27)
     today = datetime.date.today()
     if today < season_start_date:
@@ -89,7 +90,7 @@ def calculate_parlay_odds(picked_teams, moneyline_data):
     for team in picked_teams:
         american_odd = moneyline_data.get(team)
         if american_odd is None:
-            continue  # Skip this team if no odds are available
+            continue
 
         picks_with_odds_count += 1
         if american_odd > 0:
@@ -135,10 +136,7 @@ def fetch_api_data(endpoint, params):
 def fetch_game_results(year, week):
     """Fetches game results for a given week and returns a set of winning teams."""
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
-    if error:
-        print(f"Failed to fetch game results: {error}")
-        return set()
-    if not games_data:
+    if error or not games_data:
         return set()
     winning_teams = set()
     for game in games_data:
@@ -155,20 +153,18 @@ def fetch_completed_game_scores(year, week):
     games_data, error = fetch_api_data("games", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error or not games_data:
         return {}
-
     scores = {}
     for game in games_data:
         if game.get('completed') and game.get('homePoints') is not None and game.get('awayPoints') is not None:
             home_team, away_team = game['homeTeam'], game['awayTeam']
             home_pts, away_pts = game['homePoints'], game['awayPoints']
-
             scores[home_team] = {'score': home_pts, 'opponent_score': away_pts, 'win': home_pts > away_pts}
             scores[away_team] = {'score': away_pts, 'opponent_score': home_pts, 'win': away_pts > home_pts}
     return scores
 
 @st.cache_data(ttl=3600)
 def fetch_betting_lines(year, week):
-    """Fetches betting lines (spread and moneyline) for a given week from the API."""
+    """Fetches betting lines for a given week from the API."""
     lines_data, error = fetch_api_data("lines", {'year': year, 'week': week, 'seasonType': 'regular'})
     if error or not lines_data: return {}
 
@@ -177,30 +173,27 @@ def fetch_betting_lines(year, week):
         if game.get('lines'):
             preferred_providers = ['Bovada', 'DraftKings', 'consensus']
             line_to_use = None
-
             for provider in preferred_providers:
                 found_line = next((line for line in game['lines'] if line.get('provider') == provider), None)
                 if found_line:
                     line_to_use = found_line
                     break
-
-            if not line_to_use:
+            if not line_to_use and game['lines']:
                 line_to_use = game['lines'][0]
+            
+            if line_to_use:
+                if line_to_use.get('spread'):
+                    try:
+                        spread = float(line_to_use['spread'])
+                        betting_data[game['homeTeam']]['spread'] = spread
+                        betting_data[game['awayTeam']]['spread'] = -spread
+                    except (ValueError, TypeError):
+                        pass
 
-            if line_to_use.get('spread'):
-                try:
-                    spread = float(line_to_use['spread'])
-                    betting_data[game['homeTeam']]['spread'] = spread
-                    betting_data[game['awayTeam']]['spread'] = -spread
-                except (ValueError, TypeError):
-                    pass
-
-            if line_to_use.get('homeMoneyline') is not None and line_to_use.get('awayMoneyline') is not None:
-                betting_data[game['homeTeam']]['moneyline'] = line_to_use['homeMoneyline']
-                betting_data[game['awayTeam']]['moneyline'] = line_to_use['awayMoneyline']
-
+                if line_to_use.get('homeMoneyline') is not None and line_to_use.get('awayMoneyline') is not None:
+                    betting_data[game['homeTeam']]['moneyline'] = line_to_use['homeMoneyline']
+                    betting_data[game['awayTeam']]['moneyline'] = line_to_use['awayMoneyline']
     return dict(betting_data)
-
 
 # --- Scoreboard Logic (with SQL Database) ---
 
@@ -226,7 +219,8 @@ def update_scoreboard(week, year):
                 s.execute(text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'), params=dict(user=user, week=week, wins=wins))
             s.commit()
         st.success(f"Scoreboard successfully updated for Week {week}!")
-        st.cache_data.clear(); st.cache_resource.clear()
+        st.cache_data.clear()
+        st.cache_resource.clear()
 
 def display_scoreboard():
     """Loads scoreboard data and displays a leaderboard and a styled table."""
@@ -264,21 +258,15 @@ def display_scoreboard():
                     user_status = emoji_map.get(user, '')
                     display_status = user_status if not user_status.startswith(':') else '⭐'
                     label_str = f"{medals[i]} {display_status} {user}".strip()
-                    st.metric(
-                        label=label_str,
-                        value=int(row['Total Wins'])
-                    )
+                    st.metric(label=label_str, value=int(row['Total Wins']))
         st.divider()
         st.subheader("Full Season Standings")
 
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
 
-        # The map now just points to the filename.
         IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
 
-        # It just returns the filename if the status matches.
-        # Streamlit will automatically look in the 'static' folder.
         def get_image_filename(status_val):
             return IMAGE_MAP.get(status_val)
 
@@ -353,6 +341,9 @@ def main_app():
             st.rerun()
 
     tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
+    
+    # --- ADD THIS TEST LINE TO SEE IF STREAMLIT CAN ACCESS THE FILE AT ALL ---
+    # st.image("static/DUMPSTER.png")
 
     with tab1:
         st.title("Weekly Picks Selection")
@@ -422,14 +413,18 @@ def main_app():
                                 s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                             s.commit()
                         st.success("Picks submitted successfully!")
-                        st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        st.rerun()
                 with col2:
                     if st.button("❌ Clear Picks", use_container_width=True):
                         with st.connection("db", type="sql").session as s:
                             s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                             s.commit()
                         st.success("Picks cleared successfully!")
-                        st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
+                        st.cache_data.clear()
+                        st.cache_resource.clear()
+                        st.rerun()
 
     with tab2:
         st.title("🏈 League Scoreboard")
@@ -440,7 +435,6 @@ def main_app():
             if st.session_state.username in ["Paul", "Weston"]:
                 st.subheader("👑 Set User Status Emojis")
                 
-                # Map of user-friendly labels to the value that will be stored
                 EMOJI_OPTIONS = {
                     "None": "None",
                     "On Fire 🔥": "🔥",
@@ -454,15 +448,13 @@ def main_app():
                     "King 👑": "👑",
                     "Subaru 🚗🔥": "🚗🔥",
                     "Dumpster Fire 🗑️🔥": "🗑️🔥",
-                    "Image: Dumpster": ":DUMPSTER:", # Special identifier for image
-                    "Image: Car": ":CAR:",       # Special identifier for image
+                    "Image: Dumpster": ":DUMPSTER:",
+                    "Image: Car": ":CAR:",
                 }
 
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
-                    # Display the labels to the user
                     selected_label = st.radio("Select Status", options=list(EMOJI_OPTIONS.keys()), horizontal=True)
-                    # Get the corresponding value to store in the DB
                     emoji_to_store = EMOJI_OPTIONS[selected_label]
                     
                     if st.form_submit_button("Update Status"):
