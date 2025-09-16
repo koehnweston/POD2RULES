@@ -274,16 +274,18 @@ def display_scoreboard():
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
 
-        IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
-        
-        script_dir = os.path.dirname(__file__)
+        # --- SIMPLIFIED CODE STARTS HERE ---
 
-        def get_image_path(status_val):
-            filename = IMAGE_MAP.get(status_val)
-            if filename:
-                path = os.path.join(script_dir, filename)
-                return path if os.path.exists(path) else None
-            return None
+        # The map now just points to the filename.
+        IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
+
+        # This function is now much simpler!
+        # It just returns the filename if the status matches.
+        # No more 'os.path' needed. Streamlit does the work.
+        def get_image_filename(status_val):
+            return IMAGE_MAP.get(status_val)
+
+        # --- SIMPLIFIED CODE ENDS HERE ---
 
         def format_user_display(row):
             status = row['status_val']
@@ -292,7 +294,7 @@ def display_scoreboard():
             return row['User Name']
 
         pivot_df['status_val'] = pivot_df['User Name'].map(emoji_map).fillna('')
-        pivot_df['Image'] = pivot_df['status_val'].apply(get_image_path)
+        pivot_df['Image'] = pivot_df['status_val'].apply(get_image_filename)
         pivot_df['User'] = pivot_df.apply(format_user_display, axis=1)
 
         rename_dict = {col: f"Week {col}" for col in week_cols}
@@ -319,33 +321,6 @@ def display_scoreboard():
             },
             hide_index=True
         )
-
-        # --- NEW DEBUGGING SECTION ---
-        with st.expander("🔍 Debug Info"):
-            st.write("**Database Status Values:**")
-            if not emoji_map:
-                st.write("No statuses are currently set in the database.")
-            else:
-                st.json(emoji_map)
-
-            st.write("**Image Path Resolution:**")
-            debug_data = []
-            for user, status in emoji_map.items():
-                if status in IMAGE_MAP:
-                    filename = IMAGE_MAP[status]
-                    full_path = os.path.join(script_dir, filename)
-                    file_exists = os.path.exists(full_path)
-                    debug_data.append({
-                        "User": user,
-                        "Status ID": status,
-                        "Expected Filename": filename,
-                        "Full Path Checked": full_path,
-                        "File Found?": "✅ Yes" if file_exists else "❌ NO"
-                    })
-            if not debug_data:
-                st.write("No users have an image status set.")
-            else:
-                st.dataframe(debug_data, use_container_width=True)
 
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -610,5 +585,6 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
 
 
