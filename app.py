@@ -245,45 +245,86 @@ def display_scoreboard():
             st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
             return
 
-        df['user'] = df['user'].apply(lambda user: f"{emoji_map.get(user, '')} {user}".strip())
-
-        df.rename(columns={'user': 'User', 'week': 'Week', 'wins': 'Wins'}, inplace=True)
-        pivot_df = df.pivot_table(index='User', columns='Week', values='Wins', aggfunc='sum').fillna(0)
+        # Pivot with raw usernames first for accurate calculations
+        pivot_df = df.pivot_table(index='user', columns='week', values='wins', aggfunc='sum').fillna(0)
 
         week_cols = sorted([col for col in pivot_df.columns if isinstance(col, (int, float))])
-
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         pivot_df.sort_values(by='Total Wins', ascending=False, inplace=True)
 
         st.header("🏆 League Podium")
-        top_users = pivot_df.head(3)
+        top_users_df = pivot_df.head(3)
 
-        if top_users.empty:
+        if top_users_df.empty:
             st.info("No scores yet to determine a leader.")
         else:
-            cols = st.columns(len(top_users))
+            cols = st.columns(len(top_users_df))
             medals = ["🥇", "🥈", "🥉"]
-            for i, (index, row) in enumerate(top_users.iterrows()):
+            for i, (user, row) in enumerate(top_users_df.iterrows()):
                 with cols[i]:
+                    user_status = emoji_map.get(user, '')
+                    # For metrics, use a placeholder for images, otherwise show emoji
+                    display_status = user_status if not user_status.startswith(':') else '⭐'
+                    label_str = f"{medals[i]} {display_status} {user}".strip()
                     st.metric(
-                        label=f"{medals[i]} {index}",
+                        label=label_str,
                         value=int(row['Total Wins'])
                     )
         st.divider()
         st.subheader("Full Season Standings")
+
+        # Reset index to convert 'user' from index to a column for easier manipulation
+        pivot_df.reset_index(inplace=True)
+        pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
+
+        IMAGE_MAP = {":DUMPSTER:": "DUMPSTER.png", ":CAR:": "CAR.png"}
+
+        def get_image_path(status_val):
+            path = IMAGE_MAP.get(status_val)
+            return path if path and os.path.exists(path) else None
+
+        def format_user_display(row):
+            status = row['status_val']
+            # If it's a standard emoji, prepend it to the name
+            if status and not status.startswith(':'):
+                return f"{status} {row['User Name']}".strip()
+            # Otherwise (it's an image or no status), just return the name
+            return row['User Name']
+
+        # Map status values from emoji_map to each user
+        pivot_df['status_val'] = pivot_df['User Name'].map(emoji_map).fillna('')
+        # Create a new column with paths to images if applicable
+        pivot_df['Image'] = pivot_df['status_val'].apply(get_image_path)
+        # Create the final user display name
+        pivot_df['User'] = pivot_df.apply(format_user_display, axis=1)
+
+        # Prepare the final dataframe for display
         rename_dict = {col: f"Week {col}" for col in week_cols}
         pivot_df.rename(columns=rename_dict, inplace=True)
 
         final_week_cols = [f"Week {col}" for col in week_cols]
-        final_cols = final_week_cols + ['Total Wins']
-        display_df = pivot_df[final_cols].astype(int)
+        # Define the final column order, with Image and User first
+        display_cols = ['Image', 'User'] + final_week_cols + ['Total Wins']
+        display_df = pivot_df[display_cols]
+        
+        # Convert numeric columns to integers for clean display
+        for col in final_week_cols + ['Total Wins']:
+            display_df[col] = display_df[col].astype(int)
 
         styled_df = display_df.style.background_gradient(
             cmap='summer_r',
             subset=['Total Wins']
         ).format(precision=0)
 
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            column_config={
+                "Image": st.column_config.ImageColumn("Status", width="small"),
+                "User": st.column_config.TextColumn("User", width="medium"),
+            },
+            hide_index=True
+        )
 
     except Exception as e:
         st.error(f"Could not connect to or read from the database: {e}")
@@ -407,15 +448,38 @@ def main_app():
         with st.expander("🛠️ League Management Tools"):
             if st.session_state.username in ["Paul", "Weston"]:
                 st.subheader("👑 Set User Status Emojis")
+                
+                # Map of user-friendly labels to the value that will be stored
+                EMOJI_OPTIONS = {
+                    "None": "None",
+                    "On Fire 🔥": "🔥",
+                    "Ice Cold ❄️": "❄️",
+                    "Money Bags 💰": "💰",
+                    "Clown 🤡": "🤡",
+                    "Galaxy Brain 🧠": "🧠",
+                    "Trash Can 🗑️": "🗑️",
+                    "To the Moon 🚀": "🚀",
+                    "Stonks Down 📉": "📉",
+                    "King 👑": "👑",
+                    "Subaru 🚗🔥": "🚗🔥",
+                    "Dumpster Fire 🗑️🔥": "🗑️🔥",
+                    "Image: Dumpster": ":DUMPSTER:", # Special identifier for image
+                    "Image: Car": ":CAR:",       # Special identifier for image
+                }
+
                 with st.form("emoji_form"):
                     user_to_edit = st.selectbox("Select User", options=list(USERS.keys()))
-                    emoji = st.radio("Select Status", options=["None", "🔥", "❄️", "💰", "🤡", "🧠", "🗑️", "🚀", "📉", "👑", "🚗🔥", "🗑️🔥"], horizontal=True)
+                    # Display the labels to the user
+                    selected_label = st.radio("Select Status", options=list(EMOJI_OPTIONS.keys()), horizontal=True)
+                    # Get the corresponding value to store in the DB
+                    emoji_to_store = EMOJI_OPTIONS[selected_label]
+                    
                     if st.form_submit_button("Update Status"):
                         try:
                             with st.connection("db", type="sql").session as s:
                                 s.execute(text('DELETE FROM user_status WHERE "user" = :user;'), params={"user": user_to_edit})
-                                if emoji != "None":
-                                    s.execute(text('INSERT INTO user_status ("user", emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji})
+                                if emoji_to_store != "None":
+                                    s.execute(text('INSERT INTO user_status ("user", emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji_to_store})
                                 s.commit()
                             st.success(f"Status for {user_to_edit} has been updated.")
                             st.rerun()
