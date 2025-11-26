@@ -11,12 +11,11 @@ from sqlalchemy import text
 import pprint
 import matplotlib
 
-
-# --- Page and App Configuration ---
+# --- Page and App Configuration (THEMED) ---
 
 st.set_page_config(
-    page_title="CFB Weekly Picks",
-    page_icon="🏈",
+    page_title="CFB Thanksgiving Picks",
+    page_icon="🦃", # Changed to Turkey
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -52,7 +51,6 @@ def parse_draft_summary(file_path="draft_summary.txt"):
 
 def get_current_week():
     """Calculates the current week of the season."""
-    # Using a fixed date far in the future to ensure stability
     season_start_date = datetime.date(2025, 8, 27)
     today = datetime.date.today()
     if today < season_start_date:
@@ -80,7 +78,7 @@ def are_picks_locked(week, year):
         return False
 
 def calculate_parlay_odds(picked_teams, moneyline_data):
-    """Calculates the parlay odds for a list of picks, skipping teams with no odds."""
+    """Calculates the parlay odds for a list of picks."""
     if not picked_teams:
         return "N/A"
 
@@ -200,10 +198,10 @@ def fetch_betting_lines(year, week):
 def update_scoreboard(week, year):
     """Calculates scores for a week and updates the database."""
     conn = st.connection("db", type="sql")
-    with st.spinner(f"Fetching winners and calculating scores for Week {week}..."):
+    with st.spinner(f"Preparing the feast and calculating scores for Week {week}..."):
         winning_teams = fetch_game_results(year, week)
         if not winning_teams:
-            st.warning(f"No completed game results found for Week {week} to update scoreboard.")
+            st.warning(f"No completed game results found for Week {week}.")
             return
 
         all_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {week};")
@@ -218,7 +216,7 @@ def update_scoreboard(week, year):
             for user, wins in scores.items():
                 s.execute(text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'), params=dict(user=user, week=week, wins=wins))
             s.commit()
-        st.success(f"Scoreboard successfully updated for Week {week}!")
+        st.success(f"The table is set! Scoreboard updated for Week {week}!")
         st.cache_data.clear()
         st.cache_resource.clear()
 
@@ -236,7 +234,7 @@ def display_scoreboard():
 
         df = conn.query("SELECT * FROM scoreboard;")
         if df.empty:
-            st.info("Scoreboard is empty. Submit picks or add a manual score to begin.")
+            st.info("Scoreboard is empty. Submit picks to put meat on the table.")
             return
 
         pivot_df = df.pivot_table(index='user', columns='week', values='wins', aggfunc='sum').fillna(0)
@@ -245,11 +243,11 @@ def display_scoreboard():
         pivot_df['Total Wins'] = pivot_df[week_cols].sum(axis=1)
         pivot_df.sort_values(by='Total Wins', ascending=False, inplace=True)
 
-        st.header("🏆 League Podium")
+        st.header("🏆 The Head Table (Podium)")
         top_users_df = pivot_df.head(3)
 
         if top_users_df.empty:
-            st.info("No scores yet to determine a leader.")
+            st.info("No scores yet.")
         else:
             cols = st.columns(len(top_users_df))
             medals = ["🥇", "🥈", "🥉"]
@@ -260,7 +258,7 @@ def display_scoreboard():
                     label_str = f"{medals[i]} {display_status} {user}".strip()
                     st.metric(label=label_str, value=int(row['Total Wins']))
         st.divider()
-        st.subheader("Full Season Standings")
+        st.subheader("🍂 Full Harvest Standings")
 
         pivot_df.reset_index(inplace=True)
         pivot_df.rename(columns={'user': 'User Name'}, inplace=True)
@@ -290,8 +288,9 @@ def display_scoreboard():
         for col in final_week_cols + ['Total Wins']:
             display_df[col] = display_df[col].astype(int)
 
+        # Changed colormap to Autumn colors
         styled_df = display_df.style.background_gradient(
-            cmap='summer_r',
+            cmap='Oranges', 
             subset=['Total Wins']
         ).format(precision=0)
 
@@ -313,40 +312,37 @@ def display_scoreboard():
 
 def display_login_form():
     """Displays the login form."""
-    st.header("🏈 College Football Weekly Picks")
+    st.header("🦃 Thanksgiving Football Picks")
     with st.form("login_form"):
         username = st.text_input("Username", key="login_username")
         password = st.text_input("Password", type="password", key="login_password")
-        submitted = st.form_submit_button("Login")
+        submitted = st.form_submit_button("Join the Feast")
         if submitted:
             if username in USERS and USERS[username] == password:
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 st.rerun()
             else:
-                st.error("Invalid username or password.")
+                st.error("Invalid credentials. No turkey for you!")
 
 # --- Main Application Logic ---
 
 def main_app():
     """The main application interface shown after a successful login."""
     with st.sidebar:
-        st.header(f"🏈 Welcome, {st.session_state.username}!")
-        st.write("Your Drafted Teams:")
+        st.header(f"🍂 Welcome, {st.session_state.username}!")
+        st.write("Your Drafted Turkeys (Teams):")
         my_teams_df = pd.DataFrame(st.session_state.my_teams, columns=["Team"])
         st.dataframe(my_teams_df, hide_index=True, use_container_width=True)
         st.divider()
-        if st.button("Logout", use_container_width=True):
+        if st.button("Leave the Table (Logout)", use_container_width=True):
             st.session_state.clear()
             st.rerun()
 
-    tab1, tab2 = st.tabs(["✍️ Weekly Picks", "🏆 Scoreboard"])
+    tab1, tab2 = st.tabs(["🍗 Weekly Feast (Picks)", "🌽 Harvest Standings"])
     
-    # --- ADD THIS TEST LINE TO SEE IF STREAMLIT CAN ACCESS THE FILE AT ALL ---
-    # st.image("static/DUMPSTER.png")
-
     with tab1:
-        st.title("Weekly Picks Selection")
+        st.title("🦃 Weekly Picks Selection")
         current_year = datetime.datetime.now().year
         current_week = int(st.selectbox(
             "Select Week",
@@ -355,7 +351,7 @@ def main_app():
             key="week_selector_tab1"
         ).split(" ")[1])
 
-        with st.spinner(f"Fetching data for Week {current_week}..."):
+        with st.spinner(f"Plucking feathers for Week {current_week}..."):
             betting_data = fetch_betting_lines(current_year, current_week)
             completed_scores = fetch_completed_game_scores(current_year, current_week)
             conn = st.connection("db", type="sql")
@@ -396,58 +392,58 @@ def main_app():
         picks_are_locked = are_picks_locked(current_week, current_year)
 
         if picks_are_locked:
-            st.warning(f"🔒 Picks for Week {current_week} are locked.")
-            st.subheader(f"Your Matchups & Results for Week {current_week}")
+            st.warning(f"🔒 The Oven is Locked! Picks for Week {current_week} are cooking.")
+            st.subheader(f"Your Plate for Week {current_week}")
             st.data_editor(picks_df, column_config={"Select": st.column_config.CheckboxColumn("Picked", default=False)}, disabled=['Select', 'My Team', 'Location', 'Opponent', 'Line', 'Result'], hide_index=True, use_container_width=True, key=f"picks_display_{current_week}")
         else:
-            st.subheader(f"Your Matchups for Week {current_week}")
+            st.subheader(f"Fill Your Plate for Week {current_week}")
             if not picks_df.empty:
                 edited_df = st.data_editor(picks_df, column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)}, disabled=["My Team", "Location", "Opponent", "Line", "Result"], hide_index=True, use_container_width=True, key=f"picks_editor_{current_week}")
                 selected_teams = edited_df[edited_df["Select"]]["My Team"].tolist()
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✅ Submit Picks", use_container_width=True, type="primary"):
+                    if st.button("✅ Serve Picks", use_container_width=True, type="primary"):
                         with st.connection("db", type="sql").session as s:
                             s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                             for team in selected_teams:
                                 s.execute(text('INSERT INTO picks ("user", week, team) VALUES (:user, :week, :team);'), params={"user": st.session_state.username, "week": current_week, "team": team})
                             s.commit()
-                        st.success("Picks submitted successfully!")
+                        st.success("Gobble gobble! Picks served successfully!")
                         st.cache_data.clear()
                         st.cache_resource.clear()
                         st.rerun()
                 with col2:
-                    if st.button("❌ Clear Picks", use_container_width=True):
+                    if st.button("❌ Toss Leftovers (Clear)", use_container_width=True):
                         with st.connection("db", type="sql").session as s:
                             s.execute(text('DELETE FROM picks WHERE "user" = :user AND week = :week;'), params={"user": st.session_state.username, "week": current_week})
                             s.commit()
-                        st.success("Picks cleared successfully!")
+                        st.success("Plate cleared!")
                         st.cache_data.clear()
                         st.cache_resource.clear()
                         st.rerun()
 
     with tab2:
-        st.title("🏈 League Scoreboard")
+        st.title("🌽 League Cornucopia (Scoreboard)")
         display_scoreboard()
         st.divider()
 
-        with st.expander("🛠️ League Management Tools"):
+        with st.expander("🛠️ Kitchen Tools (Management)"):
             if st.session_state.username in ["Paul", "Weston"]:
-                st.subheader("👑 Set User Status Emojis")
+                st.subheader("👑 Set Pilgrim Status")
                 
+                # --- UPDATED HOLIDAY EMOJI THEMES ---
                 EMOJI_OPTIONS = {
                     "None": "None",
-                    "On Fire 🔥": "🔥",
-                    "Ice Cold ❄️": "❄️",
-                    "Money Bags 💰": "💰",
-                    "Clown 🤡": "🤡",
-                    "Galaxy Brain 🧠": "🧠",
-                    "Trash Can 🗑️": "🗑️",
-                    "To the Moon 🚀": "🚀",
-                    "Stonks Down 📉": "📉",
-                    "King 👑": "👑",
-                    "Subaru 🚗🔥": "🚗🔥",
-                    "Dumpster Fire 🗑️🔥": "🗑️🔥",
+                    "Roasted (On Fire) 🍗🔥": "🍗🔥",
+                    "Frozen Turkey 🧊🦃": "🧊🦃",
+                    "Cornucopia (Rich) 🌽💰": "🌽💰",
+                    "Jive Turkey 🤡🦃": "🤡🦃",
+                    "Gravy Brain 🧠🥣": "🧠🥣",
+                    "Leftovers (Trash) 🥡": "🥡",
+                    "Mashed Potato Mountain 🥔🏔️": "🥔🏔️",
+                    "King of the Table 👑🍗": "👑🍗",
+                    "The Pilgrim 🎩": "🎩",
+                    "Full Tummy 🤰": "🤰",
                     "Image: Dumpster": ":DUMPSTER:",
                     "Image: Car": ":CAR:",
                 }
@@ -464,13 +460,13 @@ def main_app():
                                 if emoji_to_store != "None":
                                     s.execute(text('INSERT INTO user_status ("user", emoji) VALUES (:user, :emoji);'), params={"user": user_to_edit, "emoji": emoji_to_store})
                                 s.commit()
-                            st.success(f"Status for {user_to_edit} has been updated.")
+                            st.success(f"Status for {user_to_edit} has been garnished.")
                             st.rerun()
                         except Exception as e: st.error(f"Database error: {e}")
 
             st.subheader("Manual Score Adjustment")
             with st.form("manual_update_form"):
-                st.write("Use this form to add or update scores for weeks not covered by the API (e.g., Week 0).")
+                st.write("Add scores for weeks not covered by the API.")
                 manual_user = st.selectbox("Select User", options=list(USERS.keys()), key="manual_user_select")
                 manual_week = st.number_input("Enter Week", min_value=0, step=1, value=0)
                 manual_wins = st.number_input("Enter Total Wins", min_value=0, step=1)
@@ -480,7 +476,7 @@ def main_app():
                             s.execute(text('DELETE FROM scoreboard WHERE "user" = :user AND week = :week;'), params={"user": manual_user, "week": manual_week})
                             s.execute(text('INSERT INTO scoreboard ("user", week, wins) VALUES (:user, :week, :wins);'), params={"user": manual_user, "week": manual_week, "wins": manual_wins})
                             s.commit()
-                        st.success(f"Successfully updated Week {manual_week} score for {manual_user} to {manual_wins} wins.")
+                        st.success(f"Updated Week {manual_week} score for {manual_user}.")
                         st.rerun()
                     except Exception as e: st.error(f"Failed to update database: {e}")
 
@@ -491,39 +487,40 @@ def main_app():
                 st.info("No weeks are available to update yet.")
             else:
                 week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
-                if st.button(f"Calculate & Update Scores for Week {week_to_update}", type="primary"):
+                if st.button(f"Cook Scores for Week {week_to_update}", type="primary"):
                     update_scoreboard(week_to_update, datetime.datetime.now().year)
 
         st.divider()
 
-        st.header("🕵️‍♂️ Weekly Pick Review")
+        st.header("🕵️‍♂️ Post-Game Digest (Review)")
         current_year = datetime.datetime.now().year
         last_completed_week = get_current_week() - 1
 
         if last_completed_week < 1:
-            st.info("No weeks have been completed yet for a review.")
+            st.info("No weeks have been completed yet.")
         else:
             reviewable_weeks = range(1, last_completed_week + 1)
             review_week = st.selectbox("Select a week to review", options=reviewable_weeks, index=len(reviewable_weeks) - 1, format_func=lambda w: f"Week {w}")
 
-            with st.spinner(f"Gathering intel and expert opinions for Week {review_week}..."):
+            with st.spinner(f"Reviewing the game tape for Week {review_week}..."):
                 conn = st.connection("db", type="sql")
                 all_weekly_picks_df = conn.query(f"SELECT * FROM picks WHERE week = {review_week};")
                 betting_data = fetch_betting_lines(current_year, review_week)
                 game_results = fetch_completed_game_scores(current_year, review_week)
 
             if all_weekly_picks_df.empty:
-                st.warning(f"No one submitted picks for Week {review_week}, so there's nothing to review!")
+                st.warning(f"No one submitted picks for Week {review_week}. Fasting week?")
             else:
                 picks_by_user = all_weekly_picks_df.groupby('user')
                 moneyline_odds = {team: data['moneyline'] for team, data in betting_data.items() if 'moneyline' in data}
 
                 for user, user_picks_df in picks_by_user:
-                    with st.expander(f"**{user}'s Report Card for Week {review_week}**"):
+                    with st.expander(f"**{user}'s Plate for Week {review_week}**"):
                         total_picks = len(user_picks_df)
                         correct_picks, upset_wins, favorite_losses = 0, 0, 0
                         review_data, picked_teams_list = [], []
 
+                        # --- UPDATED THEMED COMMENTARY ---
                         if user == "Jared":
                             is_chalk_eater, is_fish_bettor = False, False
                             for _, pick_row in user_picks_df.iterrows():
@@ -531,8 +528,8 @@ def main_app():
                                 if spread is not None:
                                     if spread < 0: is_chalk_eater = True
                                     elif spread > 0: is_fish_bettor = True
-                            if is_fish_bettor: st.warning("🐠 **Fish Bet Detected!** Jared is swimming against the current by picking an underdog.")
-                            if is_chalk_eater: st.info("🍞 **Chalk Eater!** Jared is playing it safe with a favorite.")
+                            if is_fish_bettor: st.warning("🐠 **Fish Bet!** Swimming upstream... or maybe just drowning in gravy.")
+                            if is_chalk_eater: st.info("🥖 **Stale Roll!** Playing it safe with the favorites.")
 
                         for _, pick_row in user_picks_df.iterrows():
                             team = pick_row['team']
@@ -551,12 +548,12 @@ def main_app():
                             review_data.append({"Pick": team, "Spread": spread_str, "Type": pick_type, "Outcome": outcome_str})
 
                         parlay_str = calculate_parlay_odds(picked_teams_list, moneyline_odds)
-                        st.markdown(f"##### Grade: **{correct_picks}/{total_picks}** | Hypothetical Parlay: **{parlay_str}**")
+                        st.markdown(f"##### Grade: **{correct_picks}/{total_picks}** | Hypothetical Cornucopia: **{parlay_str}**")
 
-                        if correct_picks == total_picks and total_picks > 0: st.success("🔥 **Flawless Victory!** A perfect week. Are you a time traveler or just that good? Absolutely brilliant.")
-                        if upset_wins > 0: st.info(f"🧠 **Galaxy Brain Alert!** You successfully called **{upset_wins} upset(s)**. You zigged when Vegas zagged. Well played.")
-                        if favorite_losses > 0: st.warning(f"💥 **Bad Beat City!** You got burned by **{favorite_losses} supposed 'sure thing'(s)**. Vegas sends its 'condolences'.")
-                        if correct_picks == 0 and total_picks > 0: st.error("🤡 **The Jester Award!** A bold strategy to pick all losers. It's a statement, we're just not sure what it is.")
+                        if correct_picks == total_picks and total_picks > 0: st.success("🦃 **The Golden Turkey!** A perfect week! You get the wishbone and the drumstick.")
+                        if upset_wins > 0: st.info(f"🦴 **Wishbone Snap!** You correctly called **{upset_wins} upset(s)**. Pure cranberry sauce genius.")
+                        if favorite_losses > 0: st.warning(f"🍞 **Burnt Stuffing!** You choked on **{favorite_losses} supposed 'sure thing'(s)**.")
+                        if correct_picks == 0 and total_picks > 0: st.error("😴 **Tryptophan Coma!** You picked all losers. Time for a nap.")
 
                         st.dataframe(pd.DataFrame(review_data), hide_index=True, use_container_width=True)
 
