@@ -11,6 +11,8 @@ from sqlalchemy import text
 import pprint
 import matplotlib
 
+SEASON_YEAR = 2025
+
 # --- Page and App Configuration (THEMED) ---
 
 st.set_page_config(
@@ -343,7 +345,10 @@ def main_app():
     
     with tab1:
         st.title("🦃 Weekly Picks Selection")
-        current_year = datetime.datetime.now().year
+        
+        # --- FIX: Use the constant SEASON_YEAR instead of current system year ---
+        current_year = SEASON_YEAR 
+        
         current_week = int(st.selectbox(
             "Select Week",
             options=[f"Week {i}" for i in range(1, 16)],
@@ -360,12 +365,14 @@ def main_app():
 
             game_info = {}
             try:
+                # Ensure the CSV filename uses the correct year if you have local files
                 schedule_df = pd.read_csv(f"{current_year}_week_{current_week}.csv")
                 for _, row in schedule_df.iterrows():
                     game_info[row['homeTeam']] = {'opponent': row['awayTeam'], 'location': 'Home'}
                     game_info[row['awayTeam']] = {'opponent': row['homeTeam'], 'location': 'Away'}
             except FileNotFoundError:
-                st.warning(f"Schedule file '{current_year}_week_{current_week}.csv' not found.")
+                # Warn, but don't crash if CSV is missing; API data might still load
+                pass 
 
         picks_data = []
         for team in st.session_state.my_teams:
@@ -487,13 +494,18 @@ def main_app():
                 st.info("No weeks are available to update yet.")
             else:
                 week_to_update = st.selectbox("Select week to update scores", options=updatable_weeks, index=len(updatable_weeks) - 1)
+                
+                # --- FIX: Pass SEASON_YEAR here ---
                 if st.button(f"Cook Scores for Week {week_to_update}", type="primary"):
-                    update_scoreboard(week_to_update, datetime.datetime.now().year)
+                    update_scoreboard(week_to_update, SEASON_YEAR)
 
         st.divider()
 
         st.header("🕵️‍♂️ Post-Game Digest (Review)")
-        current_year = datetime.datetime.now().year
+        
+        # --- FIX: Use SEASON_YEAR instead of current system year ---
+        current_year = SEASON_YEAR
+        
         last_completed_week = get_current_week() - 1
 
         if last_completed_week < 1:
@@ -569,3 +581,4 @@ if st.session_state.logged_in:
     main_app()
 else:
     display_login_form()
+
